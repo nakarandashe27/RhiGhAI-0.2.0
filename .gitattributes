@@ -1,0 +1,24 @@
+# Text files are stored with LF in the repository and checked out with the
+# platform's own endings. Without this, contributors on different platforms
+# produce diffs where every line changed but nothing did.
+* text=auto
+
+# Windows-only tooling that has to keep CRLF in the working tree.
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.sln  text eol=crlf
+
+# Better hunk headers for C#.
+*.cs   text diff=csharp
+
+# Never touched: no end-of-line conversion, no diffing as text.
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.3dm  binary
+*.gh   binary
+*.ghx  binary
+*.gha  binary
+*.rhp  binary
+*.yak  binary
