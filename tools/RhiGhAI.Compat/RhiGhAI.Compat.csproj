@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>RhiGhAI.Compat</AssemblyName>
+    <RootNamespace>RhiGhAI.Compat</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\RhiGhAI.Core\RhiGhAI.Core.csproj" />
+  </ItemGroup>
+</Project>

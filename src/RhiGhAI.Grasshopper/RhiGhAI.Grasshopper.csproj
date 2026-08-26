@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>RhiGhAI.Grasshopper</AssemblyName>
+    <AssemblyTitle>RhiGhAI Grasshopper</AssemblyTitle>
+    <Description>Parametric Grasshopper component for RhiGhAI.</Description>
+    <RootNamespace>RhiGhAI.Grasshopper</RootNamespace>
+    <TargetExt>.gha</TargetExt>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RhiGhAI.Core\RhiGhAI.Core.csproj" />
+    <PackageReference Include="Grasshopper" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>

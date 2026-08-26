@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+.dotnet-home/
+.packages/
+.runtime-dev/
+TestResults/
+artifacts/
+*.user
+*.suo
+*.DotSettings.user
+*.rhi
+*.yak
+
+# Local agent/dev tooling, not part of the plugin
+.codex/
+.claude/

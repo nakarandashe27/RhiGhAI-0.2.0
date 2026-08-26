@@ -1,0 +1,48 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhiGhAI.Core", "src\RhiGhAI.Core\RhiGhAI.Core.csproj", "{11D52A6A-86CC-46AB-A081-076288283ED1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhiGhAI.Rhino", "src\RhiGhAI.Rhino\RhiGhAI.Rhino.csproj", "{A6F35248-421B-4A2C-B538-E071CB79239B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhiGhAI.Grasshopper", "src\RhiGhAI.Grasshopper\RhiGhAI.Grasshopper.csproj", "{42FE947F-B9E1-47ED-A330-22C3A4E0FE0D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhiGhAI.Tests", "tests\RhiGhAI.Tests\RhiGhAI.Tests.csproj", "{235376D9-18F8-469E-A95E-D55FC586D00A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhiGhAI.HostTests", "tests\RhiGhAI.HostTests\RhiGhAI.HostTests.csproj", "{56FBA23D-54A6-4782-95A1-5C38385BE42F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhiGhAI.Compat", "tools\RhiGhAI.Compat\RhiGhAI.Compat.csproj", "{C3EDAE0C-B5CD-403C-9630-BC07309F49B9}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{11D52A6A-86CC-46AB-A081-076288283ED1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{11D52A6A-86CC-46AB-A081-076288283ED1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{11D52A6A-86CC-46AB-A081-076288283ED1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{11D52A6A-86CC-46AB-A081-076288283ED1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A6F35248-421B-4A2C-B538-E071CB79239B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A6F35248-421B-4A2C-B538-E071CB79239B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A6F35248-421B-4A2C-B538-E071CB79239B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A6F35248-421B-4A2C-B538-E071CB79239B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{42FE947F-B9E1-47ED-A330-22C3A4E0FE0D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{42FE947F-B9E1-47ED-A330-22C3A4E0FE0D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{42FE947F-B9E1-47ED-A330-22C3A4E0FE0D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{42FE947F-B9E1-47ED-A330-22C3A4E0FE0D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{235376D9-18F8-469E-A95E-D55FC586D00A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{235376D9-18F8-469E-A95E-D55FC586D00A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{235376D9-18F8-469E-A95E-D55FC586D00A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{235376D9-18F8-469E-A95E-D55FC586D00A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{56FBA23D-54A6-4782-95A1-5C38385BE42F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{56FBA23D-54A6-4782-95A1-5C38385BE42F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{56FBA23D-54A6-4782-95A1-5C38385BE42F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{56FBA23D-54A6-4782-95A1-5C38385BE42F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C3EDAE0C-B5CD-403C-9630-BC07309F49B9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3EDAE0C-B5CD-403C-9630-BC07309F49B9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3EDAE0C-B5CD-403C-9630-BC07309F49B9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3EDAE0C-B5CD-403C-9630-BC07309F49B9}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

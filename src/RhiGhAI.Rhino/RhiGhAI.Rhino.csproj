@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>RhiGhAI.Rhino</AssemblyName>
+    <AssemblyTitle>RhiGhAI</AssemblyTitle>
+    <Description>Controlled natural-language modelling for Rhino 8 and Grasshopper.</Description>
+    <RootNamespace>RhiGhAI.Rhino</RootNamespace>
+    <TargetExt>.rhp</TargetExt>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RhiGhAI.Core\RhiGhAI.Core.csproj" />
+    <ProjectReference Include="..\RhiGhAI.Grasshopper\RhiGhAI.Grasshopper.csproj" />
+    <PackageReference Include="RhinoCommon" ExcludeAssets="runtime" />
+    <PackageReference Include="RhinoWindows" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>

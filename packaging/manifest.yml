@@ -1,0 +1,13 @@
+name: RhiGhAI
+version: 0.2.0
+authors:
+  - RhiGhAI personal project
+description: >
+  Personal non-commercial Rhino 8 and Grasshopper MVP for controlled
+  natural-language modelling: Rhino geometry or an editable Grasshopper
+  definition of native components, planned by Codex or any OpenAI-compatible API.
+keywords:
+  - rhino
+  - grasshopper
+  - codex
+  - parametric

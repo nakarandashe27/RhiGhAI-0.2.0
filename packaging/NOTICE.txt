@@ -1,0 +1,11 @@
+RhiGhAI 0.2.0
+
+Personal non-commercial project. All rights reserved by the project author.
+No licence is granted for public redistribution or commercial use.
+
+RhiGhAI does not redistribute Rhino, Grasshopper, or RhinoCommon. The full local
+installer bundles an unmodified, Authenticode-signed OpenAI Codex CLI runtime
+for the sole purpose of running its documented app-server interface. RhiGhAI
+verifies the OpenAI publisher before first use and performs no runtime download.
+OpenAI and ChatGPT are trademarks of OpenAI.
+Rhino and Grasshopper are trademarks of Robert McNeel & Associates.
