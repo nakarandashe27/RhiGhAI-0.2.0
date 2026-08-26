@@ -42,24 +42,129 @@ Threat model and trust boundary: [`context/architecture/07-нефункцион�
 - .NET 8 SDK (to build from source)
 - An account for one of the model providers below
 
-## Build and install from source
+## Install
 
-No prebuilt binaries are committed to this repository. From the project root:
+No prebuilt binaries are committed to this repository, so every route starts by building. Three routes, in order of how much you want to do yourself:
+
+| Route | Use it when | Needs Codex installed? |
+|---|---|---|
+| **A. Packaged installer** | you already use Codex Desktop / Codex CLI | **yes** |
+| **B. Manual install** | you plan to use an API key, or have no Codex | no |
+| **C. Hand it to an AI agent** | you would rather not touch a terminal | no |
+
+**Before any route:** Windows x64, Rhino 8.20+, [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), and **Rhino fully closed** — a loaded `.rhp` cannot be overwritten. Administrator rights, Node.js and npm are not required; everything installs for the current user only.
+
+> **Route A needs Codex on the machine.** `Build-Package.ps1` copies the official signed `codex.exe` into the package and verifies its OpenAI Authenticode signature, so it **fails outright** if Codex Desktop or the Codex CLI is not installed. That bundled runtime is only ever used by the Codex provider — with an API key the plugin is fully functional without it, which is exactly what route B builds.
+
+### Route A — packaged installer
 
 ```powershell
 .\packaging\Build-Package.ps1
 ```
 
-The script restores pinned NuGet dependencies, runs the test suite, and produces a local installer ZIP plus a `.yak` in `artifacts\`. Then:
+Restores pinned NuGet dependencies, runs the tests, and writes a local installer ZIP plus a `.yak` into `artifacts\`. Then:
 
 1. Close Rhino.
-2. Unpack `artifacts\RhiGhAI-0.2.0-local-installer.zip` **completely**.
-3. Run `Install RhiGhAI.cmd`, then start Rhino again.
-4. Type `RhiGhAI` in the Rhino command line.
+2. Unpack `artifacts\RhiGhAI-0.2.0-local-installer.zip` **completely** — running the `.cmd` from inside the ZIP viewer will fail.
+3. Run `Install RhiGhAI.cmd`.
+4. Start Rhino 8 and type `RhiGhAI` in the command line.
 
-No administrator rights, Node.js or npm required. The installer writes to a single unversioned path, removes previous versions, and refuses to run while `Rhino.exe` is open. The build number actually loaded is shown in the panel header — check there that an update applied.
+The installer waits for Rhino to exit, removes stale versioned folders from older builds, copies into one unversioned path, and registers the plugin. The panel header shows the build actually loaded — check there that an update applied.
+
+### Route B — manual install, no Codex required
+
+Build only the plugin:
+
+```powershell
+dotnet build -c Release
+```
+
+All five required files land in `src\RhiGhAI.Rhino\bin\Release\net8.0-windows\`. Copy them into Rhino's per-user plugin folder:
+
+```powershell
+$src = "src\RhiGhAI.Rhino\bin\Release\net8.0-windows"
+$dst = "$env:APPDATA\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Copy-Item -Force -Destination $dst -Path `
+  "$src\RhiGhAI.Rhino.rhp", `
+  "$src\RhiGhAI.Rhino.deps.json", `
+  "$src\RhiGhAI.Rhino.runtimeconfig.json", `
+  "$src\RhiGhAI.Core.dll", `
+  "$src\RhiGhAI.Grasshopper.gha"
+```
+
+Then register it, either way:
+
+**Through Rhino (simplest, no registry).** Start Rhino → `PlugInManager` → **Install…** → select the `RhiGhAI.Rhino.rhp` you just copied into `%APPDATA%\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI`. Pick the copied file, not the one in `bin\`, or Rhino will load the plugin straight out of your build folder.
+
+**Or from PowerShell**, with Rhino closed:
+
+```powershell
+$id  = "BC57A265-8A44-4BDB-A887-EA2647812367"
+$key = "HKCU:\Software\McNeel\Rhinoceros\8.0\Plug-Ins\$id"
+New-Item -Path "$key\PlugIn" -Force | Out-Null
+Set-ItemProperty -Path $key           -Name Name     -Value "RhiGhAI"
+Set-ItemProperty -Path "$key\PlugIn" -Name FileName -Value "$dst\RhiGhAI.Rhino.rhp"
+Remove-ItemProperty -Path $key -Name FileName -ErrorAction SilentlyContinue
+```
+
+`FileName` **must** sit on the `PlugIn` subkey — Rhino ignores it on the parent, and a stale value there makes Rhino keep loading an older build.
+
+Start Rhino, run `RhiGhAI`, then open **Settings → Model provider → API key** and enter an endpoint, key and model. The Codex source will report a missing runtime; that is expected on this route and affects nothing else.
+
+### Route C — let an AI agent install it for you
+
+Works with any agent that can run shell commands on your machine: Claude Code, Codex CLI, Cursor, Gemini CLI, Grok with a tool-running client, and so on. **Close Rhino first**, then paste this:
+
+```text
+Install the RhiGhAI plugin for Rhino 8 on this Windows machine.
+
+Repository: https://github.com/nakarandashe27/RhiGhAI-0.2.0
+
+Do exactly this, and stop and tell me if any step fails:
+
+1. Check the prerequisites and report what you find:
+   - Rhino 8 present at "%ProgramFiles%\Rhino 8\System\Rhino.exe"
+   - .NET 8 SDK available ("dotnet --list-sdks" shows an 8.x entry)
+   - Rhino is NOT running ("tasklist" has no Rhino.exe). If it is, stop and
+     ask me to close it. Never kill Rhino yourself: I may have unsaved work.
+
+2. Clone the repository into a folder of your choosing and run:
+       dotnet build -c Release
+   Report the warning and error counts. The build must finish with 0 errors.
+
+3. Copy these five files from
+   "src\RhiGhAI.Rhino\bin\Release\net8.0-windows" into
+   "%APPDATA%\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI", creating it if needed:
+       RhiGhAI.Rhino.rhp
+       RhiGhAI.Rhino.deps.json
+       RhiGhAI.Rhino.runtimeconfig.json
+       RhiGhAI.Core.dll
+       RhiGhAI.Grasshopper.gha
+
+4. Register the plugin for the current user only, under
+   HKCU\Software\McNeel\Rhinoceros\8.0\Plug-Ins\BC57A265-8A44-4BDB-A887-EA2647812367
+       - value "Name" = "RhiGhAI" on that key
+       - value "FileName" = full path to the COPIED RhiGhAI.Rhino.rhp,
+         on the "PlugIn" SUBKEY, not on the parent key
+       - delete any "FileName" value left on the parent key
+   Touch no other registry location, and no other Rhino plugin.
+
+5. Tell me to start Rhino 8 and run the command: RhiGhAI
+   The panel header must read v0.2.0.
+
+Constraints: do not require administrator rights, do not disable Windows
+Defender or SmartScreen, do not download a Codex runtime, and do not enter
+any API key on my behalf — I will enter it myself in the plugin's Settings.
+```
+
+The agent installs the plugin only. **Enter the API key yourself** in Settings → Model provider: it is encrypted per Windows user on your machine, and no agent should be handling it.
 
 > The legacy `.rhi` format is deliberately not produced: the Rhino Installer Engine inspector is incompatible with modern .NET 8 plugins.
+
+### Uninstall
+
+Close Rhino, delete `%APPDATA%\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI`, and remove the registry key `HKCU\Software\McNeel\Rhinoceros\8.0\Plug-Ins\BC57A265-8A44-4BDB-A887-EA2647812367`. See *Data and removal* below for the state folders, which are not deleted automatically.
 
 ## Model providers
 
@@ -162,9 +267,21 @@ RhiGhAI — open-source плагин для Rhino 8. Вы описываете �
 
 Windows x64 · Rhino 8.20+ · .NET 8 SDK для сборки · аккаунт одного из провайдеров ниже.
 
-## Сборка и установка из исходников
+## Установка
 
-Готовые сборки в репозитории не хранятся. Из корня проекта:
+Готовые сборки в репозитории не хранятся, поэтому любой путь начинается со сборки. Три пути — по мере того, сколько вы хотите делать руками:
+
+| Путь | Когда | Нужен ли установленный Codex? |
+|---|---|---|
+| **A. Пакетный установщик** | вы уже пользуетесь Codex Desktop / Codex CLI | **да** |
+| **B. Установка вручную** | вы собираетесь работать по API-ключу или Codex нет | нет |
+| **C. Поручить ИИ-агенту** | не хочется трогать терминал | нет |
+
+**Перед любым путём:** Windows x64, Rhino 8.20+, [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) и **полностью закрытый Rhino** — загруженный `.rhp` нельзя перезаписать. Права администратора, Node.js и npm не нужны; всё ставится только для текущего пользователя.
+
+> **Путь A требует Codex на машине.** `Build-Package.ps1` кладёт в пакет официальный подписанный `codex.exe` и проверяет его подпись OpenAI, поэтому **падает с ошибкой**, если Codex Desktop или Codex CLI не установлен. Этот runtime нужен исключительно провайдеру Codex — по API-ключу плагин полностью работоспособен без него, и именно это собирает путь B.
+
+### Путь A — пакетный установщик
 
 ```powershell
 .\packaging\Build-Package.ps1
@@ -173,13 +290,107 @@ Windows x64 · Rhino 8.20+ · .NET 8 SDK для сборки · аккаунт �
 Скрипт восстанавливает закреплённые NuGet-зависимости, запускает тесты и создаёт локальный installer ZIP и `.yak` в `artifacts\`. Затем:
 
 1. Закройте Rhino.
-2. Распакуйте `artifacts\RhiGhAI-0.2.0-local-installer.zip` **целиком**.
-3. Запустите `Install RhiGhAI.cmd`, снова откройте Rhino.
-4. Выполните команду `RhiGhAI` в командной строке Rhino.
+2. Распакуйте `artifacts\RhiGhAI-0.2.0-local-installer.zip` **целиком** — запуск `.cmd` прямо из окна просмотра архива не сработает.
+3. Запустите `Install RhiGhAI.cmd`.
+4. Откройте Rhino 8 и выполните команду `RhiGhAI`.
 
-Права администратора, Node.js и npm не нужны. Установщик кладёт файлы в один неверсионированный путь, удаляет папки прошлых версий и не запускается, пока работает `Rhino.exe`. Номер фактически загруженной сборки показан в шапке панели.
+Установщик дожидается выхода из Rhino, удаляет папки прошлых версий, копирует файлы в один неверсионированный путь и регистрирует плагин. Номер фактически загруженной сборки показан в шапке панели.
+
+### Путь B — вручную, Codex не нужен
+
+Соберите только плагин:
+
+```powershell
+dotnet build -c Release
+```
+
+Все пять нужных файлов оказываются в `src\RhiGhAI.Rhino\bin\Release\net8.0-windows\`. Скопируйте их в пользовательскую папку плагинов Rhino:
+
+```powershell
+$src = "src\RhiGhAI.Rhino\bin\Release\net8.0-windows"
+$dst = "$env:APPDATA\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Copy-Item -Force -Destination $dst -Path `
+  "$src\RhiGhAI.Rhino.rhp", `
+  "$src\RhiGhAI.Rhino.deps.json", `
+  "$src\RhiGhAI.Rhino.runtimeconfig.json", `
+  "$src\RhiGhAI.Core.dll", `
+  "$src\RhiGhAI.Grasshopper.gha"
+```
+
+Затем зарегистрируйте плагин — любым из двух способов:
+
+**Средствами Rhino (проще, без реестра).** Запустите Rhino → `PlugInManager` → **Install…** → выберите `RhiGhAI.Rhino.rhp`, который вы только что скопировали в `%APPDATA%\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI`. Указывайте именно скопированный файл, а не тот, что в `bin\`, иначе Rhino будет грузить плагин прямо из папки сборки.
+
+**Или из PowerShell** при закрытом Rhino:
+
+```powershell
+$id  = "BC57A265-8A44-4BDB-A887-EA2647812367"
+$key = "HKCU:\Software\McNeel\Rhinoceros\8.0\Plug-Ins\$id"
+New-Item -Path "$key\PlugIn" -Force | Out-Null
+Set-ItemProperty -Path $key           -Name Name     -Value "RhiGhAI"
+Set-ItemProperty -Path "$key\PlugIn" -Name FileName -Value "$dst\RhiGhAI.Rhino.rhp"
+Remove-ItemProperty -Path $key -Name FileName -ErrorAction SilentlyContinue
+```
+
+`FileName` **обязан** лежать в подключе `PlugIn`: в родительском ключе Rhino его игнорирует, а устаревшее значение там заставляет Rhino грузить старую сборку.
+
+Запустите Rhino, выполните `RhiGhAI`, откройте **Настройки → Провайдер модели → API-ключ** и впишите адрес, ключ и модель. Источник Codex сообщит, что runtime не найден — на этом пути так и должно быть, на остальное это не влияет.
+
+### Путь C — пусть установит ИИ-агент
+
+Подходит любой агент, умеющий выполнять команды на вашей машине: Claude Code, Codex CLI, Cursor, Gemini CLI, Grok в клиенте с инструментами и другие. **Сначала закройте Rhino**, затем вставьте это:
+
+```text
+Установи плагин RhiGhAI для Rhino 8 на этой машине с Windows.
+
+Репозиторий: https://github.com/nakarandashe27/RhiGhAI-0.2.0
+
+Сделай ровно следующее и остановись, сообщив мне, если какой-то шаг не прошёл:
+
+1. Проверь предварительные условия и доложи результат:
+   - Rhino 8 есть по пути "%ProgramFiles%\Rhino 8\System\Rhino.exe"
+   - доступен .NET 8 SDK ("dotnet --list-sdks" показывает версию 8.x)
+   - Rhino НЕ запущен (в "tasklist" нет Rhino.exe). Если запущен — остановись
+     и попроси меня закрыть его. Не завершай процесс Rhino сам: у меня могут
+     быть несохранённые файлы.
+
+2. Склонируй репозиторий в удобную папку и выполни:
+       dotnet build -c Release
+   Доложи количество предупреждений и ошибок. Сборка должна пройти с 0 ошибок.
+
+3. Скопируй эти пять файлов из
+   "src\RhiGhAI.Rhino\bin\Release\net8.0-windows" в
+   "%APPDATA%\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI", создав папку при необходимости:
+       RhiGhAI.Rhino.rhp
+       RhiGhAI.Rhino.deps.json
+       RhiGhAI.Rhino.runtimeconfig.json
+       RhiGhAI.Core.dll
+       RhiGhAI.Grasshopper.gha
+
+4. Зарегистрируй плагин только для текущего пользователя, в ключе
+   HKCU\Software\McNeel\Rhinoceros\8.0\Plug-Ins\BC57A265-8A44-4BDB-A887-EA2647812367
+       - значение "Name" = "RhiGhAI" в самом ключе
+       - значение "FileName" = полный путь к СКОПИРОВАННОМУ RhiGhAI.Rhino.rhp,
+         в ПОДКЛЮЧЕ "PlugIn", а не в родительском ключе
+       - удали значение "FileName", если оно осталось в родительском ключе
+   Больше никакие ветки реестра и никакие другие плагины Rhino не трогай.
+
+5. Скажи мне запустить Rhino 8 и выполнить команду: RhiGhAI
+   В шапке панели должно быть v0.2.0.
+
+Ограничения: не требуй прав администратора, не отключай Windows Defender и
+SmartScreen, не скачивай Codex runtime и не вписывай за меня API-ключ —
+я введу его сам в настройках плагина.
+```
+
+Агент ставит только плагин. **Ключ вводите сами** в «Настройки → Провайдер модели»: он шифруется под вашего пользователя Windows на вашей машине, и передавать его агенту не следует.
 
 > Устаревший формат `.rhi` намеренно не выпускается: инспектор Rhino Installer Engine несовместим с современными .NET 8-плагинами.
+
+### Удаление
+
+Закройте Rhino, удалите папку `%APPDATA%\McNeel\Rhinoceros\8.0\Plug-ins\RhiGhAI` и ключ реестра `HKCU\Software\McNeel\Rhinoceros\8.0\Plug-Ins\BC57A265-8A44-4BDB-A887-EA2647812367`. Про папки с состоянием, которые не удаляются автоматически, см. «Данные и удаление» ниже.
 
 ## Провайдер модели
 
