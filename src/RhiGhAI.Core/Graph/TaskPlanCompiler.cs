@@ -91,6 +91,16 @@ public static class TaskPlanCompiler
             case TransformOperation transform when transform.References is null || transform.Translation is null:
             case CopyOperation copy when copy.References is null || copy.Translation is null:
             case SetAttributesOperation attributes when attributes.References is null:
+            case CreateCurveOperation curve when curve.Points is null:
+            case CreateCircleOperation circle when circle.Center is null || circle.Normal is null:
+            case CreateArcOperation arc when arc.Start is null || arc.Mid is null || arc.End is null:
+            case LoftOperation loft when loft.CurveIds is null:
+            case Sweep1Operation sweep when string.IsNullOrWhiteSpace(sweep.RailId) || sweep.ProfileIds is null:
+            case PipeOperation pipe when string.IsNullOrWhiteSpace(pipe.RailId):
+            case RevolveOperation revolve when string.IsNullOrWhiteSpace(revolve.ProfileId) || revolve.AxisStart is null || revolve.AxisEnd is null:
+            case FilletEdgesOperation fillet when string.IsNullOrWhiteSpace(fillet.BrepId):
+            case TransformOperation { Rotation: { Axis: null } or { Center: null } } or TransformOperation { Scale.Center: null }:
+            case CopyOperation { Rotation: { Axis: null } or { Center: null } } or CopyOperation { Scale.Center: null }:
                 throw new TaskPlanValidationException("MissingRequiredValue", "Operation содержит null вместо обязательного значения.");
         }
 
@@ -108,12 +118,28 @@ public static class TaskPlanCompiler
                 throw new TaskPlanValidationException("InvalidDirection", "Extrusion direction должна быть ненулевой.");
             case BooleanOperation boolean when boolean.InputIds.Count is < 2 or > 8 || !ValidLayer(boolean.Layer):
                 throw new TaskPlanValidationException("BooleanLimit", "Boolean принимает от 2 до 8 Brep.");
-            case TransformOperation transform when transform.References.Count is < 1 or > 64 || !Finite(transform.Translation) || !ValidOptionalLayer(transform.Layer):
-                throw new TaskPlanValidationException("InvalidTransform", "Некорректный transform vector.");
-            case CopyOperation copy when copy.References.Count is < 1 or > 64 || !Finite(copy.Translation) || !ValidOptionalLayer(copy.Layer):
-                throw new TaskPlanValidationException("InvalidTransform", "Некорректный copy vector.");
+            case TransformOperation transform when transform.References.Count is < 1 or > 64 || !Finite(transform.Translation) || !ValidRotation(transform.Rotation) || !ValidScale(transform.Scale) || !ValidOptionalLayer(transform.Layer):
+                throw new TaskPlanValidationException("InvalidTransform", "Некорректный transform: vector, rotation (ненулевая ось) или scale (0.001..1000).");
+            case CopyOperation copy when copy.References.Count is < 1 or > 64 || !Finite(copy.Translation) || !ValidRotation(copy.Rotation) || !ValidScale(copy.Scale) || !ValidOptionalLayer(copy.Layer):
+                throw new TaskPlanValidationException("InvalidTransform", "Некорректный copy: vector, rotation (ненулевая ось) или scale (0.001..1000).");
             case SetAttributesOperation attributes when attributes.References.Count is < 1 or > 64 || !ValidLayer(attributes.Layer):
                 throw new TaskPlanValidationException("InvalidAttributes", "Некорректные references или слой attributes.");
+            case CreateCurveOperation curve when curve.Points.Count is < 2 or > 256 || (curve.Closed && curve.Points.Count < 3) || curve.Points.Any(point => !Finite(point)) || !ValidLayer(curve.Layer):
+                throw new TaskPlanValidationException("InvalidCurve", "Curve требует 2..256 точек (замкнутая — от 3).");
+            case CreateCircleOperation circle when !Finite(circle.Center) || !Finite(circle.Normal) || Length(circle.Normal) <= 1e-9 || !PositiveFinite(circle.Radius) || !ValidLayer(circle.Layer):
+                throw new TaskPlanValidationException("InvalidCurve", "Circle требует положительный radius и ненулевую normal.");
+            case CreateArcOperation arc when !Finite(arc.Start) || !Finite(arc.Mid) || !Finite(arc.End) || Collinear(arc.Start, arc.Mid, arc.End) || !ValidLayer(arc.Layer):
+                throw new TaskPlanValidationException("InvalidCurve", "Arc требует три различные неколлинеарные точки.");
+            case LoftOperation loft when loft.CurveIds.Count is < 2 or > 32 || !ValidLayer(loft.Layer):
+                throw new TaskPlanValidationException("LoftLimit", "Loft принимает от 2 до 32 кривых.");
+            case Sweep1Operation sweep when sweep.ProfileIds.Count is < 1 or > 16 || !ValidLayer(sweep.Layer):
+                throw new TaskPlanValidationException("SweepLimit", "Sweep1 принимает от 1 до 16 профилей.");
+            case PipeOperation pipe when !PositiveFinite(pipe.Radius) || !ValidLayer(pipe.Layer):
+                throw new TaskPlanValidationException("InvalidDimension", "Pipe требует положительный radius.");
+            case RevolveOperation revolve when !Finite(revolve.AxisStart) || !Finite(revolve.AxisEnd) || Distance(revolve.AxisStart, revolve.AxisEnd) <= 1e-9 || !double.IsFinite(revolve.AngleDegrees) || revolve.AngleDegrees is <= 0 or > 360 || !ValidLayer(revolve.Layer):
+                throw new TaskPlanValidationException("InvalidRevolve", "Revolve требует ось ненулевой длины и угол в (0, 360].");
+            case FilletEdgesOperation fillet when !PositiveFinite(fillet.Radius) || !ValidLayer(fillet.Layer):
+                throw new TaskPlanValidationException("InvalidDimension", "FilletEdges требует положительный radius.");
         }
     }
 
@@ -126,10 +152,20 @@ public static class TaskPlanCompiler
         {
             switch (node.TypedOperation)
             {
-                case CreatePlanarSurfaceOperation surface when !operations.TryGetValue(surface.BoundaryId, out TaskOperation? boundary) || boundary is not CreatePolylineOperation:
-                    throw new TaskPlanValidationException("WrongReferenceType", "Planar surface boundary должна ссылаться на polyline operation.");
-                case ExtrudeOperation extrusion when !operations.TryGetValue(extrusion.ProfileId, out TaskOperation? profile) || profile is not CreatePolylineOperation:
-                    throw new TaskPlanValidationException("WrongReferenceType", "Extrude profile должна ссылаться на polyline operation.");
+                case CreatePlanarSurfaceOperation surface when !IsCurve(operations, surface.BoundaryId):
+                    throw new TaskPlanValidationException("WrongReferenceType", "Planar surface boundary должна ссылаться на curve operation (polyline, curve, circle, arc).");
+                case ExtrudeOperation extrusion when !IsCurve(operations, extrusion.ProfileId):
+                    throw new TaskPlanValidationException("WrongReferenceType", "Extrude profile должна ссылаться на curve operation (polyline, curve, circle, arc).");
+                case LoftOperation loft when loft.CurveIds.Any(id => !IsCurveOrCurveCopy(operations, id)):
+                    throw new TaskPlanValidationException("WrongReferenceType", "Loft curves должны ссылаться на curve operations или copy кривых этого плана.");
+                case Sweep1Operation sweep when !IsCurve(operations, sweep.RailId) || sweep.ProfileIds.Any(id => !IsCurve(operations, id)):
+                    throw new TaskPlanValidationException("WrongReferenceType", "Sweep1 rail и profiles должны ссылаться на curve operations.");
+                case PipeOperation pipe when !IsCurve(operations, pipe.RailId):
+                    throw new TaskPlanValidationException("WrongReferenceType", "Pipe rail должна ссылаться на curve operation.");
+                case RevolveOperation revolve when !IsCurve(operations, revolve.ProfileId):
+                    throw new TaskPlanValidationException("WrongReferenceType", "Revolve profile должна ссылаться на curve operation.");
+                case FilletEdgesOperation fillet when !operations.TryGetValue(fillet.BrepId, out TaskOperation? solid) || !ProducesBrep(solid):
+                    throw new TaskPlanValidationException("WrongReferenceType", "FilletEdges должна ссылаться на Brep operation этого плана.");
                 case BooleanOperation boolean when boolean.InputIds.Any(id => !operations.TryGetValue(id, out TaskOperation? input) || !ProducesBrep(input)):
                     throw new TaskPlanValidationException("WrongReferenceType", "Boolean inputs должны ссылаться на Brep operations этого плана.");
                 case TransformOperation transform when transform.References.Any(reference => !selectedReferences.Contains(reference)):
@@ -141,7 +177,18 @@ public static class TaskPlanCompiler
     }
 
     private static bool ProducesBrep(TaskOperation operation) => operation is
-        CreateBoxOperation or CreatePlanarSurfaceOperation or ExtrudeOperation or BooleanOperation;
+        CreateBoxOperation or CreatePlanarSurfaceOperation or ExtrudeOperation or BooleanOperation or
+        LoftOperation or Sweep1Operation or PipeOperation or RevolveOperation or FilletEdgesOperation;
+
+    private static bool IsCurve(IReadOnlyDictionary<string, TaskOperation> operations, string id) =>
+        operations.TryGetValue(id, out TaskOperation? operation) &&
+        operation is CreatePolylineOperation or CreateCurveOperation or CreateCircleOperation or CreateArcOperation;
+
+    // A copy of plan curves yields one curve per reference, which is how a loft gets rotated or
+    // scaled sections without the model computing every point itself.
+    private static bool IsCurveOrCurveCopy(IReadOnlyDictionary<string, TaskOperation> operations, string id) =>
+        IsCurve(operations, id) ||
+        (operations.TryGetValue(id, out TaskOperation? operation) && operation is CopyOperation copy && copy.References.All(reference => IsCurve(operations, reference)));
 
     private static ImmutableArray<OperationNode> TopologicalSort(IReadOnlyList<OperationNode> nodes, IReadOnlySet<string> operationIds)
     {
@@ -180,6 +227,11 @@ public static class TaskPlanCompiler
         TransformOperation transform => transform.References,
         CopyOperation copy => copy.References,
         SetAttributesOperation attributes => attributes.References,
+        LoftOperation loft => loft.CurveIds,
+        Sweep1Operation sweep => [sweep.RailId, .. sweep.ProfileIds],
+        PipeOperation pipe => [pipe.RailId],
+        RevolveOperation revolve => [revolve.ProfileId],
+        FilletEdgesOperation fillet => [fillet.BrepId],
         _ => []
     };
 
@@ -194,15 +246,22 @@ public static class TaskPlanCompiler
         TransformOperation => "transform",
         CopyOperation => "copy",
         SetAttributesOperation => "setAttributes",
+        CreateCurveOperation => "createCurve",
+        CreateCircleOperation => "createCircle",
+        CreateArcOperation => "createArc",
+        LoftOperation => "loft",
+        Sweep1Operation => "sweep1",
+        PipeOperation => "pipe",
+        RevolveOperation => "revolve",
+        FilletEdgesOperation => "filletEdges",
         _ => throw new TaskPlanValidationException("UnknownOperation", "Unknown operation type.")
     };
 
     private static string ResultType(TaskOperation operation) => operation switch
     {
         EnsureLayerOperation => "Layer",
-        CreatePolylineOperation => "Curve",
-        CreatePlanarSurfaceOperation => "Brep",
-        CreateBoxOperation or ExtrudeOperation or BooleanOperation => "Brep",
+        CreatePolylineOperation or CreateCurveOperation or CreateCircleOperation or CreateArcOperation => "Curve",
+        _ when ProducesBrep(operation) => "Brep",
         TransformOperation or CopyOperation or SetAttributesOperation => "ModelObjectList",
         _ => "Unknown"
     };
@@ -219,6 +278,18 @@ public static class TaskPlanCompiler
         !value.Contains("::", StringComparison.Ordinal) &&
         value.IndexOfAny(['\\', '/', '?', '*', '"', '<', '>', '|', '\0', '\r', '\n']) < 0;
     private static bool ValidOptionalLayer(string? value) => value is null || ValidLayer(value);
+    private static bool ValidRotation(RotationSpec? rotation) => rotation is null ||
+        (Finite(rotation.Axis) && Length(rotation.Axis) > 1e-9 && Bounded(rotation.AngleDegrees) && Math.Abs(rotation.AngleDegrees) <= 3600 && Finite(rotation.Center));
+    private static bool ValidScale(ScaleSpec? scale) => scale is null ||
+        (double.IsFinite(scale.Factor) && scale.Factor is >= 0.001 and <= 1000 && Finite(scale.Center));
+    private static double Distance(Point3 a, Point3 b) => Length(new Vector3(b.X - a.X, b.Y - a.Y, b.Z - a.Z));
+    private static bool Collinear(Point3 a, Point3 b, Point3 c)
+    {
+        Vector3 u = new(b.X - a.X, b.Y - a.Y, b.Z - a.Z);
+        Vector3 v = new(c.X - a.X, c.Y - a.Y, c.Z - a.Z);
+        Vector3 cross = new((u.Y * v.Z) - (u.Z * v.Y), (u.Z * v.X) - (u.X * v.Z), (u.X * v.Y) - (u.Y * v.X));
+        return Length(cross) <= 1e-9 * Math.Max(1, Length(u) * Length(v));
+    }
     private static double Length(Vector3 vector) => Math.Sqrt((vector.X * vector.X) + (vector.Y * vector.Y) + (vector.Z * vector.Z));
 }
 

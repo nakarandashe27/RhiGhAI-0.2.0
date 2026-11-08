@@ -11,7 +11,7 @@ $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts'))
 $stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot 'package-input'))
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $stagingRoot 'RhiGhAI'))
-$installerRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot 'RhiGhAI-0.2.3-local-installer'))
+$installerRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot 'RhiGhAI-0.2.4-local-installer'))
 $installerPayload = Join-Path $installerRoot 'Payload\RhiGhAI'
 
 foreach ($validatedPath in @($stagingRoot, $packageRoot, $installerRoot)) {
@@ -86,9 +86,9 @@ if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notm
     throw 'The discovered Codex runtime is not validly signed by OpenAI OpCo, LLC.'
 }
 
-$yakZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.3-rh8-win-yak.zip'
-$yakPath = Join-Path $artifactsRoot 'RhiGhAI-0.2.3-rh8-win.yak'
-$installerZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.3-local-installer.zip'
+$yakZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.4-rh8-win-yak.zip'
+$yakPath = Join-Path $artifactsRoot 'RhiGhAI-0.2.4-rh8-win.yak'
+$installerZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.4-local-installer.zip'
 
 foreach ($path in @($yakZip, $yakPath, $installerZip)) {
     if (Test-Path -LiteralPath $path) {

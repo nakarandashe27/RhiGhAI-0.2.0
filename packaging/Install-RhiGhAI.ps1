@@ -88,9 +88,9 @@ try {
         Set-ItemProperty -LiteralPath ($key + '\PlugIn') -Name FileName -Value (Join-Path $target 'RhiGhAI.Rhino.rhp')
         Remove-ItemProperty -LiteralPath $key -Name FileName -ErrorAction SilentlyContinue
     }
-    Write-Output "Installed RhiGhAI 0.2.3: $target"
+    Write-Output "Installed RhiGhAI 0.2.4: $target"
     if ($hadPrevious) { Write-Output "Previous installation preserved: $backup" }
-    Write-Output 'Start Rhino 8 and run RhiGhAI. Header must show v0.2.3.'
+    Write-Output 'Start Rhino 8 and run RhiGhAI. Header must show v0.2.4.'
 }
 catch {
     if ($activated) {

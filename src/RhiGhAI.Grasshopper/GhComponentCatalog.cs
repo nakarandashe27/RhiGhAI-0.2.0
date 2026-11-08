@@ -35,11 +35,6 @@ public sealed class GhComponentCatalog : IGhCatalog
         "Hops"
     ];
 
-    private static readonly string[] CoreCategories =
-    [
-        "Params", "Maths", "Sets", "Vector", "Curve", "Surface", "Mesh", "Intersect", "Transform"
-    ];
-
     private static readonly object CacheGate = new();
     private static GhComponentCatalog? _cached;
     private static int _cachedProxyCount;
@@ -54,7 +49,7 @@ public sealed class GhComponentCatalog : IGhCatalog
         // Prefer native components to same-name floating parameters (Rectangle, Circle).
         // Stable GUID ordering resolves remaining ties independently of library load order.
         foreach (GhComponentSpec spec in all
-            .OrderByDescending(spec => CoreCategories.Contains(spec.Category, StringComparer.OrdinalIgnoreCase))
+            .OrderByDescending(spec => GhCatalogRanking.CoreCategories.Contains(spec.Category, StringComparer.OrdinalIgnoreCase))
             .ThenBy(spec => spec.IsParameter)
             .ThenBy(spec => spec.ComponentGuid))
         {
@@ -163,19 +158,8 @@ public sealed class GhComponentCatalog : IGhCatalog
     /// </summary>
     public string Describe(string userText, int maxComponents = 240)
     {
-        string[] words = (userText ?? string.Empty)
-            .Split([' ', ',', '.', ';', ':', '\n', '\r', '\t', '(', ')', '"'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(word => word.Length >= 4)
-            .Select(word => word.ToLowerInvariant())
-            .Distinct(StringComparer.Ordinal)
-            .Take(24)
-            .ToArray();
-
         StringBuilder builder = new();
-        foreach (GhComponentSpec spec in _all
-            .OrderByDescending(spec => Score(spec, words))
-            .ThenBy(spec => spec.Name, StringComparer.OrdinalIgnoreCase)
-            .Take(Math.Clamp(maxComponents, 40, 900)))
+        foreach (GhComponentSpec spec in GhCatalogRanking.Rank(_all, userText, maxComponents))
         {
             builder.Append(spec.Name).Append(" | ").Append(spec.Category).Append('>').Append(spec.SubCategory);
             builder.Append(" | in: ").Append(Ports(spec.Inputs));
@@ -184,29 +168,6 @@ public sealed class GhComponentCatalog : IGhCatalog
         }
 
         return builder.ToString();
-    }
-
-    private static int Score(GhComponentSpec spec, string[] words)
-    {
-        int score = spec.Special != GhSpecialKind.None ? 1000 : 0;
-        foreach (string word in words)
-        {
-            if (spec.Name.Contains(word, StringComparison.OrdinalIgnoreCase))
-            {
-                score += 200;
-            }
-            else if (spec.Description.Contains(word, StringComparison.OrdinalIgnoreCase))
-            {
-                score += 40;
-            }
-        }
-
-        if (CoreCategories.Contains(spec.Category, StringComparer.OrdinalIgnoreCase))
-        {
-            score += 20;
-        }
-
-        return score;
     }
 
     private static string Ports(IReadOnlyList<GhPortSpec> ports) =>

@@ -55,7 +55,7 @@ public sealed class OutputSchemaTests
         JsonElement branches = TaskPlanJson.OutputSchema
             .GetProperty("properties").GetProperty("operations").GetProperty("items").GetProperty("anyOf");
 
-        Assert.Equal(9, branches.GetArrayLength());
+        Assert.Equal(17, branches.GetArrayLength());
         foreach (JsonElement branch in branches.EnumerateArray())
         {
             Assert.Equal("object", branch.GetProperty("type").GetString());

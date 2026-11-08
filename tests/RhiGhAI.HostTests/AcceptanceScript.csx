@@ -12,7 +12,7 @@ if (__rhino_doc__.Objects.Any(o => !o.IsDeleted) ||
     throw new Exception("Acceptance requires an empty, separate document saved as RhiGhAI-acceptance.3dm. Do not run in a working model.");
 var core = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "RhiGhAI.Core");
 var host = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "RhiGhAI.Rhino");
-if (host.GetName().Version.ToString() != "0.2.3.0") throw new Exception("Expected loaded RhiGhAI 0.2.3.");
+if (host.GetName().Version.ToString() != "0.2.4.0") throw new Exception("Expected loaded RhiGhAI 0.2.4.");
 var reportPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(__rhino_doc__.Path), "RHINO_ACCEPTANCE.txt");
 var planJson = core.GetType("RhiGhAI.Core.Contracts.TaskPlanJson");
 var compiler = core.GetType("RhiGhAI.Core.Graph.TaskPlanCompiler");
@@ -90,6 +90,46 @@ __rhino_doc__.Objects.Delete(seedId, true);
 phase = 2;
 return;
 }
+if (phase == 2) {
+// Free-form operations: every one executes, the results are valid Breps, one Undo removes them all.
+var formPlan = @"{""schemaVersion"":1,""targetHost"":""rhino"",""summary"":""Free form"",""assumptions"":[],""operations"":[
+{""kind"":""createCircle"",""id"":""base"",""center"":{""x"":0,""y"":0,""z"":0},""normal"":{""x"":0,""y"":0,""z"":1},""radius"":10,""layer"":""Form""},
+{""kind"":""copy"",""id"":""top"",""references"":[""base""],""translation"":{""x"":0,""y"":0,""z"":30},""rotation"":{""axis"":{""x"":0,""y"":0,""z"":1},""angleDegrees"":45,""center"":{""x"":0,""y"":0,""z"":0}},""scale"":{""factor"":0.6,""center"":{""x"":0,""y"":0,""z"":0}},""layer"":""Form""},
+{""kind"":""loft"",""id"":""tower"",""curveIds"":[""base"",""top""],""closed"":false,""cap"":true,""layer"":""Form""},
+{""kind"":""createCurve"",""id"":""rail"",""points"":[{""x"":40,""y"":0,""z"":0},{""x"":40,""y"":0,""z"":20},{""x"":50,""y"":0,""z"":40}],""closed"":false,""layer"":""Form""},
+{""kind"":""createCircle"",""id"":""profile"",""center"":{""x"":40,""y"":0,""z"":0},""normal"":{""x"":0,""y"":0,""z"":1},""radius"":2,""layer"":""Form""},
+{""kind"":""sweep1"",""id"":""swept"",""railId"":""rail"",""profileIds"":[""profile""],""closed"":false,""cap"":false,""layer"":""Form""},
+{""kind"":""createCurve"",""id"":""tubeRail"",""points"":[{""x"":60,""y"":0,""z"":0},{""x"":70,""y"":10,""z"":10},{""x"":80,""y"":0,""z"":20}],""closed"":false,""layer"":""Form""},
+{""kind"":""pipe"",""id"":""tube"",""railId"":""tubeRail"",""radius"":1.5,""cap"":true,""layer"":""Form""},
+{""kind"":""createArc"",""id"":""arc"",""start"":{""x"":100,""y"":0,""z"":0},""mid"":{""x"":105,""y"":0,""z"":10},""end"":{""x"":100,""y"":0,""z"":20},""layer"":""Form""},
+{""kind"":""revolve"",""id"":""vase"",""profileId"":""arc"",""axisStart"":{""x"":95,""y"":0,""z"":0},""axisEnd"":{""x"":95,""y"":0,""z"":20},""angleDegrees"":360,""layer"":""Form""},
+{""kind"":""createBox"",""id"":""block"",""origin"":{""x"":130,""y"":0,""z"":0},""size"":{""x"":20,""y"":20,""z"":20},""layer"":""Form""},
+{""kind"":""filletEdges"",""id"":""rounded"",""brepId"":""block"",""radius"":2,""layer"":""Form""}]}";
+var formSnapshot = snapshot();
+var formResult = execute(formSnapshot, compile(formPlan, formSnapshot));
+var formIds = ((System.Collections.IEnumerable)formResult.GetType().GetProperty("CreatedOrChangedIds").GetValue(formResult)).Cast<Guid>().ToArray();
+if (formIds.Length != 5) throw new Exception("Free form created " + formIds.Length + " objects, expected 5 (loft, sweep, pipe, revolve, fillet).");
+foreach (var id in formIds) {
+    var created = __rhino_doc__.Objects.FindId(id);
+    if (created == null || !(created.Geometry is Brep) || !created.Geometry.IsValid) throw new Exception("Free form result is not a valid Brep.");
+}
+// Execution order is topological, not textual: find the loft by where it must be.
+if (!formIds.Select(id => (Brep)__rhino_doc__.Objects.FindId(id).Geometry).Any(b => {
+        var box = b.GetBoundingBox(true);
+        return b.IsSolid && Math.Abs(box.Max.Z - 30) < 1e-6 && box.Max.X < 10 + 1e-6;
+    }))
+    throw new Exception("Capped loft is not a 30-high solid.");
+if (!__rhino_doc__.Undo()) throw new Exception("Free form Undo failed.");
+if (formIds.Any(id => __rhino_doc__.Objects.FindId(id) != null)) throw new Exception("Free form objects remained after one Undo.");
+// A fillet that cannot succeed fails before anything is written.
+var badFillet = @"{""schemaVersion"":1,""targetHost"":""rhino"",""summary"":""Bad fillet"",""assumptions"":[],""operations"":[{""kind"":""createBox"",""id"":""b"",""origin"":{""x"":0,""y"":0,""z"":0},""size"":{""x"":10,""y"":10,""z"":10},""layer"":""FilletProbe""},{""kind"":""filletEdges"",""id"":""f"",""brepId"":""b"",""radius"":50,""layer"":""FilletProbe""}]}";
+var badSnapshot = snapshot();
+try { execute(badSnapshot, compile(badFillet, badSnapshot)); throw new Exception("Expected fillet rejection."); }
+catch (Exception error) { if (!error.Message.Contains("FilletFailed")) throw; }
+if (__rhino_doc__.Layers.FindName("FilletProbe") != null || __rhino_doc__.Objects.Any(o => !o.IsDeleted)) throw new Exception("Failed fillet left something behind.");
+phase = 3;
+return;
+}
 // Reject after a layer is created but before object addition. Undo must remove that layer,
 // and leave a previous unrelated user action untouched.
 var sentinelUndo = __rhino_doc__.BeginUndoRecord("acceptance sentinel");
@@ -106,15 +146,15 @@ catch (Exception error) { if (!error.Message.Contains("UnsupportedReference")) t
 if (__rhino_doc__.Layers.FindName("RollbackProbe") != null) throw new Exception("Failed attempt left a layer.");
 if (__rhino_doc__.Objects.FindId(sentinelId) == null) throw new Exception("Rollback undid an unrelated user action.");
 __rhino_doc__.Objects.Delete(sentinelId, true);
-phase = 3;
-System.IO.File.WriteAllText(reportPath, "RHINO_ACCEPTANCE_OK panel+singleUndo selectedMove+singleUndo layerRollback+unrelatedUndoPreserved\nLoaded: " + host.Location);
+phase = 4;
+System.IO.File.WriteAllText(reportPath, "RHINO_ACCEPTANCE_OK panel+singleUndo selectedMove+singleUndo freeForm+singleUndo filletReject layerRollback+unrelatedUndoPreserved\nLoaded: " + host.Location);
 } catch (Exception error) {
-    phase = 3;
+    phase = 4;
     System.IO.File.WriteAllText(reportPath, "FAILED: " + error.ToString());
 }
 };
 System.Threading.Tasks.Task.Run(async () => {
-    for (int tick = 0; tick < 30 && phase < 3; tick++) {
+    for (int tick = 0; tick < 30 && phase < 4; tick++) {
         await System.Threading.Tasks.Task.Delay(500);
         RhinoApp.InvokeOnUiThread((Action)(() => handler(null, EventArgs.Empty)));
     }

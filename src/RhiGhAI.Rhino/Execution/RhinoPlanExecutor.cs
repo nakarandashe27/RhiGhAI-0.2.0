@@ -113,6 +113,14 @@ public static class RhinoPlanExecutor
                 ExtrudeOperation extrusion => [CreateExtrusion(outputs, extrusion, document.ModelAbsoluteTolerance)],
                 BooleanOperation boolean => CreateBoolean(outputs, boolean, document.ModelAbsoluteTolerance),
                 CopyOperation copy => CopyGeometry(document, outputs, selected, copy),
+                CreateCurveOperation curve => [CreateCurve(curve)],
+                CreateCircleOperation circle => [CreateCircle(circle)],
+                CreateArcOperation arc => [CreateArc(arc)],
+                LoftOperation loft => CreateLoft(outputs, loft, document.ModelAbsoluteTolerance),
+                Sweep1Operation sweep => CreateSweep(outputs, sweep, document.ModelAbsoluteTolerance),
+                PipeOperation pipe => CreatePipe(outputs, pipe, document.ModelAbsoluteTolerance, document.ModelAngleToleranceRadians),
+                RevolveOperation revolve => [CreateRevolve(outputs, revolve)],
+                FilletEdgesOperation fillet => CreateFillet(outputs, fillet, document.ModelAbsoluteTolerance),
                 _ => []
             };
             outputs[node.NodeId] = geometry;
@@ -138,6 +146,111 @@ public static class RhinoPlanExecutor
         }
 
         return new PolylineCurve(points);
+    }
+
+    private static NurbsCurve CreateCurve(CreateCurveOperation operation)
+    {
+        List<Point3d> points = operation.Points.Select(point => new Point3d(point.X, point.Y, point.Z)).ToList();
+        if (operation.Closed && points.Count > 1 && points[0].DistanceTo(points[^1]) <= 1e-9)
+        {
+            points.RemoveAt(points.Count - 1);
+        }
+
+        return Curve.CreateInterpolatedCurve(points, 3, operation.Closed ? CurveKnotStyle.ChordPeriodic : CurveKnotStyle.Chord) as NurbsCurve
+            ?? throw new RhinoExecutionException("CurveFailed", "Rhino не построил кривую через заданные точки.");
+    }
+
+    private static ArcCurve CreateCircle(CreateCircleOperation operation)
+    {
+        Plane plane = new(new Point3d(operation.Center.X, operation.Center.Y, operation.Center.Z), new Vector3d(operation.Normal.X, operation.Normal.Y, operation.Normal.Z));
+        Circle circle = new(plane, operation.Radius);
+        return circle.IsValid ? new ArcCurve(circle) : throw new RhinoExecutionException("CurveFailed", "Rhino не построил circle.");
+    }
+
+    private static ArcCurve CreateArc(CreateArcOperation operation)
+    {
+        Arc arc = new(ToPoint(operation.Start), ToPoint(operation.Mid), ToPoint(operation.End));
+        return arc.IsValid ? new ArcCurve(arc) : throw new RhinoExecutionException("CurveFailed", "Rhino не построил arc через три точки.");
+    }
+
+    private static List<GeometryBase> CreateLoft(Dictionary<string, List<GeometryBase>> outputs, LoftOperation operation, double tolerance)
+    {
+        // A referenced copy contributes every curve it made, in reference order.
+        List<Curve> curves = operation.CurveIds.SelectMany(id => outputs[id])
+            .Select(item => item as Curve ?? throw new RhinoExecutionException("WrongGeometryType", "Loft принимает только кривые."))
+            .ToList();
+        if (curves.Count is < 2 or > 64)
+        {
+            throw new RhinoExecutionException("LoftFailed", "Loft требует от 2 до 64 кривых.");
+        }
+
+        Brep[]? breps = Brep.CreateFromLoft(curves, Point3d.Unset, Point3d.Unset, LoftType.Normal, operation.Closed);
+        return Capped(breps, operation.Cap, tolerance, "LoftFailed", "Loft не дал допустимый результат.");
+    }
+
+    private static List<GeometryBase> CreateSweep(Dictionary<string, List<GeometryBase>> outputs, Sweep1Operation operation, double tolerance)
+    {
+        Curve rail = RequireSingle<Curve>(outputs, operation.RailId);
+        List<Curve> profiles = operation.ProfileIds.Select(id => RequireSingle<Curve>(outputs, id)).ToList();
+        Brep[]? breps = Brep.CreateFromSweep(rail, profiles, operation.Closed, tolerance);
+        return Capped(breps, operation.Cap, tolerance, "SweepFailed", "Sweep1 не дал допустимый результат.");
+    }
+
+    private static List<GeometryBase> CreatePipe(Dictionary<string, List<GeometryBase>> outputs, PipeOperation operation, double tolerance, double angleTolerance)
+    {
+        Curve rail = RequireSingle<Curve>(outputs, operation.RailId);
+        PipeCapMode cap = operation.Cap && !rail.IsClosed ? PipeCapMode.Flat : PipeCapMode.None;
+        Brep[]? breps = Brep.CreatePipe(rail, operation.Radius, false, cap, true, tolerance, angleTolerance);
+        return Capped(breps, false, tolerance, "PipeFailed", "Pipe не дал допустимый результат.");
+    }
+
+    private static Brep CreateRevolve(Dictionary<string, List<GeometryBase>> outputs, RevolveOperation operation)
+    {
+        Curve profile = RequireSingle<Curve>(outputs, operation.ProfileId);
+        Line axis = new(ToPoint(operation.AxisStart), ToPoint(operation.AxisEnd));
+        RevSurface surface = RevSurface.Create(profile, axis, 0, RhinoMath.ToRadians(operation.AngleDegrees))
+            ?? throw new RhinoExecutionException("RevolveFailed", "Rhino не создал revolve.");
+        return Brep.CreateFromRevSurface(surface, false, false)
+            ?? throw new RhinoExecutionException("RevolveFailed", "Rhino не создал revolve.");
+    }
+
+    private static List<GeometryBase> CreateFillet(Dictionary<string, List<GeometryBase>> outputs, FilletEdgesOperation operation, double tolerance)
+    {
+        Brep brep = RequireSingle<Brep>(outputs, operation.BrepId);
+        int[] edges = Enumerable.Range(0, brep.Edges.Count).ToArray();
+        double[] radii = edges.Select(_ => operation.Radius).ToArray();
+        Brep[]? breps = Brep.CreateFilletEdges(brep, edges, radii, radii, BlendType.Fillet, RailType.RollingBall, tolerance);
+        return Capped(breps, false, tolerance, "FilletFailed", "FilletEdges не дал результат: радиус, вероятно, больше граней.");
+    }
+
+    private static List<GeometryBase> Capped(Brep[]? breps, bool cap, double tolerance, string code, string message)
+    {
+        if (breps is not { Length: > 0 and <= 16 } || breps.Any(brep => brep is null || !brep.IsValid))
+        {
+            throw new RhinoExecutionException(code, message);
+        }
+
+        // CapPlanarHoles returns null when there is nothing planar to close; keep the open Brep then.
+        return breps.Select(brep => cap ? brep.CapPlanarHoles(tolerance) ?? brep : brep).Cast<GeometryBase>().ToList();
+    }
+
+    private static Point3d ToPoint(Point3 point) => new(point.X, point.Y, point.Z);
+
+    /// <summary>Scale, then rotate, then translate — the order the contract documents.</summary>
+    private static Transform BuildTransform(Vector3 translation, RotationSpec? rotation, ScaleSpec? scale)
+    {
+        Transform result = Transform.Translation(translation.X, translation.Y, translation.Z);
+        if (rotation is not null)
+        {
+            result *= Transform.Rotation(RhinoMath.ToRadians(rotation.AngleDegrees), new Vector3d(rotation.Axis.X, rotation.Axis.Y, rotation.Axis.Z), ToPoint(rotation.Center));
+        }
+
+        if (scale is not null)
+        {
+            result *= Transform.Scale(ToPoint(scale.Center), scale.Factor);
+        }
+
+        return result;
     }
 
     private static List<GeometryBase> CreatePlanarSurface(Dictionary<string, List<GeometryBase>> outputs, CreatePlanarSurfaceOperation operation, double tolerance)
@@ -205,7 +318,7 @@ public static class RhinoPlanExecutor
         IReadOnlyDictionary<string, SelectedObjectSnapshot> selected,
         CopyOperation operation)
     {
-        Transform translation = Transform.Translation(operation.Translation.X, operation.Translation.Y, operation.Translation.Z);
+        Transform translation = BuildTransform(operation.Translation, operation.Rotation, operation.Scale);
         List<GeometryBase> copies = [];
         foreach (string reference in operation.References)
         {
@@ -266,7 +379,7 @@ public static class RhinoPlanExecutor
 
     private static void ApplyTransform(RhinoDoc document, RhinoContextSnapshot snapshot, TransformOperation operation, ICollection<Guid> changed, ICollection<int> createdLayers)
     {
-        Transform translation = Transform.Translation(operation.Translation.X, operation.Translation.Y, operation.Translation.Z);
+        Transform translation = BuildTransform(operation.Translation, operation.Rotation, operation.Scale);
         Dictionary<string, SelectedObjectSnapshot> selected = snapshot.Selection.ToDictionary(item => item.ReferenceId, StringComparer.Ordinal);
         int? targetLayer = operation.Layer is null ? null : EnsureLayer(document, operation.Layer, createdLayers);
         foreach (string reference in operation.References)
@@ -359,6 +472,11 @@ public static class RhinoPlanExecutor
                 CreatePlanarSurfaceOperation surface => [surface.BoundaryId],
                 ExtrudeOperation extrusion => [extrusion.ProfileId],
                 BooleanOperation boolean => boolean.InputIds,
+                LoftOperation loft => loft.CurveIds,
+                Sweep1Operation sweep => [sweep.RailId, .. sweep.ProfileIds],
+                PipeOperation pipe => [pipe.RailId],
+                RevolveOperation revolve => [revolve.ProfileId],
+                FilletEdgesOperation fillet => [fillet.BrepId],
                 _ => []
             };
             foreach (string reference in references.Where(operationIds.Contains))
@@ -378,6 +496,14 @@ public static class RhinoPlanExecutor
         ExtrudeOperation item => item.Layer,
         BooleanOperation item => item.Layer,
         CopyOperation item => item.Layer,
+        CreateCurveOperation item => item.Layer,
+        CreateCircleOperation item => item.Layer,
+        CreateArcOperation item => item.Layer,
+        LoftOperation item => item.Layer,
+        Sweep1Operation item => item.Layer,
+        PipeOperation item => item.Layer,
+        RevolveOperation item => item.Layer,
+        FilletEdgesOperation item => item.Layer,
         _ => null
     };
 }

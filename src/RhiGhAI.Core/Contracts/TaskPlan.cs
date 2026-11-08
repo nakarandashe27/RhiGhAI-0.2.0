@@ -30,6 +30,14 @@ public sealed record TaskPlanEnvelope(
 [JsonDerivedType(typeof(TransformOperation), "transform")]
 [JsonDerivedType(typeof(CopyOperation), "copy")]
 [JsonDerivedType(typeof(SetAttributesOperation), "setAttributes")]
+[JsonDerivedType(typeof(CreateCurveOperation), "createCurve")]
+[JsonDerivedType(typeof(CreateCircleOperation), "createCircle")]
+[JsonDerivedType(typeof(CreateArcOperation), "createArc")]
+[JsonDerivedType(typeof(LoftOperation), "loft")]
+[JsonDerivedType(typeof(Sweep1Operation), "sweep1")]
+[JsonDerivedType(typeof(PipeOperation), "pipe")]
+[JsonDerivedType(typeof(RevolveOperation), "revolve")]
+[JsonDerivedType(typeof(FilletEdgesOperation), "filletEdges")]
 public abstract record TaskOperation(string Id);
 
 public sealed record EnsureLayerOperation(string Id, string Name) : TaskOperation(Id);
@@ -47,6 +55,24 @@ public enum BooleanMode
 }
 
 public sealed record BooleanOperation(string Id, BooleanMode Mode, IReadOnlyList<string> InputIds, string Layer) : TaskOperation(Id);
-public sealed record TransformOperation(string Id, IReadOnlyList<string> References, Vector3 Translation, string? Layer) : TaskOperation(Id);
-public sealed record CopyOperation(string Id, IReadOnlyList<string> References, Vector3 Translation, string? Layer) : TaskOperation(Id);
+
+/// <summary>Rotation about an axis through <paramref name="Center"/>; positive angles follow the right-hand rule.</summary>
+public sealed record RotationSpec(Vector3 Axis, double AngleDegrees, Point3 Center);
+public sealed record ScaleSpec(double Factor, Point3 Center);
+
+// Applied as scale, then rotation, then translation. Rotation and scale are optional so plans
+// written before they existed keep their meaning.
+public sealed record TransformOperation(string Id, IReadOnlyList<string> References, Vector3 Translation, string? Layer, RotationSpec? Rotation = null, ScaleSpec? Scale = null) : TaskOperation(Id);
+public sealed record CopyOperation(string Id, IReadOnlyList<string> References, Vector3 Translation, string? Layer, RotationSpec? Rotation = null, ScaleSpec? Scale = null) : TaskOperation(Id);
 public sealed record SetAttributesOperation(string Id, IReadOnlyList<string> References, string Layer) : TaskOperation(Id);
+
+/// <summary>Smooth degree-3 curve through the points; closed curves are periodic.</summary>
+public sealed record CreateCurveOperation(string Id, IReadOnlyList<Point3> Points, bool Closed, string Layer) : TaskOperation(Id);
+public sealed record CreateCircleOperation(string Id, Point3 Center, Vector3 Normal, double Radius, string Layer) : TaskOperation(Id);
+public sealed record CreateArcOperation(string Id, Point3 Start, Point3 Mid, Point3 End, string Layer) : TaskOperation(Id);
+public sealed record LoftOperation(string Id, IReadOnlyList<string> CurveIds, bool Closed, bool Cap, string Layer) : TaskOperation(Id);
+public sealed record Sweep1Operation(string Id, string RailId, IReadOnlyList<string> ProfileIds, bool Closed, bool Cap, string Layer) : TaskOperation(Id);
+public sealed record PipeOperation(string Id, string RailId, double Radius, bool Cap, string Layer) : TaskOperation(Id);
+public sealed record RevolveOperation(string Id, string ProfileId, Point3 AxisStart, Point3 AxisEnd, double AngleDegrees, string Layer) : TaskOperation(Id);
+/// <summary>Fillets every edge of one Brep produced earlier in the same plan.</summary>
+public sealed record FilletEdgesOperation(string Id, string BrepId, double Radius, string Layer) : TaskOperation(Id);

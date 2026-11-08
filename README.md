@@ -6,7 +6,7 @@
 ![Rhino 8](https://img.shields.io/badge/Rhino-8.20%2B-801010)
 ![.NET 8](https://img.shields.io/badge/.NET-8.0--windows-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
-![Status](https://img.shields.io/badge/status-MVP%200.2.3-orange)
+![Status](https://img.shields.io/badge/status-MVP%200.2.4-orange)
 
 RhiGhAI is an open-source plugin for Rhino 8. You describe a task in plain language; a language model returns a **strictly typed plan**, never code; and a deterministic executor performs only allowlisted operations.
 
@@ -44,7 +44,7 @@ Threat model and trust boundary: [`context/architecture/07-нефункцион�
 
 ## Install
 
-For the prepared local release, extract `artifacts/RhiGhAI-0.2.3-local-installer.zip` and run **Install RhiGhAI.cmd** with Rhino closed. The ZIP includes the official signed Codex runtime; users of this package need neither an SDK nor a separate Codex installation. Source-building routes are below.
+For the prepared local release, extract `artifacts/RhiGhAI-0.2.4-local-installer.zip` and run **Install RhiGhAI.cmd** with Rhino closed. The ZIP includes the official signed Codex runtime; users of this package need neither an SDK nor a separate Codex installation. Source-building routes are below.
 
 
 No prebuilt binaries are committed to this repository, so every route starts by building. Three routes, in order of how much you want to do yourself:
@@ -68,7 +68,7 @@ No prebuilt binaries are committed to this repository, so every route starts by 
 Restores pinned NuGet dependencies, runs the tests, and writes a local installer ZIP plus a `.yak` into `artifacts\`. Then:
 
 1. Close Rhino.
-2. Unpack `artifacts\RhiGhAI-0.2.3-local-installer.zip` **completely** — running the `.cmd` from inside the ZIP viewer will fail.
+2. Unpack `artifacts\RhiGhAI-0.2.4-local-installer.zip` **completely** — running the `.cmd` from inside the ZIP viewer will fail.
 3. Run `Install RhiGhAI.cmd`.
 4. Start Rhino 8 and type `RhiGhAI` in the command line.
 
@@ -154,7 +154,7 @@ Do exactly this, and stop and tell me if any step fails:
    Touch no other registry location, and no other Rhino plugin.
 
 5. Tell me to start Rhino 8 and run the command: RhiGhAI
-   The panel header must read v0.2.3.
+   The panel header must read v0.2.4.
 
 Constraints: do not require administrator rights, do not disable Windows
 Defender or SmartScreen, do not download a Codex runtime, and do not enter
@@ -184,13 +184,13 @@ Structured output is requested as strict `json_schema`; providers without a stri
 
 ## What is in the MVP
 
-**Rhino:** box, polyline, planar surface, extrusion/Brep, bounded Booleans, copy/translation, layers and attributes. Modifying existing geometry is allowed only for the current selection. One successful answer is undone by a single `Ctrl+Z`.
+**Rhino:** box, polyline, smooth curve, circle, arc, planar surface, extrusion, loft, sweep, pipe, revolve, edge fillet, bounded Booleans, copy/move/rotate/scale, layers and attributes. Modifying existing geometry is allowed only for the current selection. One successful answer is undone by a single `Ctrl+Z`.
 
 **Grasshopper:** up to 80 nodes and 240 wires, a slider for every meaningful parameter, its own group on the canvas. A repeat request in the same conversation replaces the previous set entirely, in one GH undo.
 
 **Both:** up to five bounded self-repair attempts leaving no geometry behind, stop/timeout, conversation continuation, and a readable listing of the checked plan in the message feed.
 
-Mesh, SubD, materials, rendering, layouts and blocks are deliberately out of scope for 0.2.3.
+Mesh, SubD, materials, rendering, layouts and blocks are deliberately out of scope for 0.2.4.
 
 ## Try it
 
@@ -231,7 +231,7 @@ Settings, the encrypted provider key, local conversation bindings and the workin
 
 ## Status and honesty
 
-0.2.3 is an MVP. It is not code-signed and not published to Yak. It has been exercised on a live Rhino 8 installation, but it has not been through a broad clean-machine matrix — treat it as early software and keep backups of work you care about.
+0.2.4 is an MVP. It is not code-signed and not published to Yak. It has been exercised on a live Rhino 8 installation, but it has not been through a broad clean-machine matrix — treat it as early software and keep backups of work you care about.
 
 RhiGhAI is not an engineering tool: it can produce a geometrically valid result that is nonetheless wrong for your purpose. You remain the architect.
 
@@ -272,7 +272,7 @@ Windows x64 · Rhino 8.20+ · .NET 8 SDK для сборки · аккаунт �
 
 ## Установка
 
-Для подготовленной локальной версии распакуйте `artifacts/RhiGhAI-0.2.3-local-installer.zip` и запустите **Install RhiGhAI.cmd**, предварительно закрыв Rhino. В ZIP включён официальный подписанный Codex runtime; SDK и отдельная установка Codex для пользователя этого пакета не нужны. Ниже описана сборка из исходников.
+Для подготовленной локальной версии распакуйте `artifacts/RhiGhAI-0.2.4-local-installer.zip` и запустите **Install RhiGhAI.cmd**, предварительно закрыв Rhino. В ZIP включён официальный подписанный Codex runtime; SDK и отдельная установка Codex для пользователя этого пакета не нужны. Ниже описана сборка из исходников.
 
 
 Готовые сборки в репозитории не хранятся, поэтому любой путь начинается со сборки. Три пути — по мере того, сколько вы хотите делать руками:
@@ -296,7 +296,7 @@ Windows x64 · Rhino 8.20+ · .NET 8 SDK для сборки · аккаунт �
 Скрипт восстанавливает закреплённые NuGet-зависимости, запускает тесты и создаёт локальный installer ZIP и `.yak` в `artifacts\`. Затем:
 
 1. Закройте Rhino.
-2. Распакуйте `artifacts\RhiGhAI-0.2.3-local-installer.zip` **целиком** — запуск `.cmd` прямо из окна просмотра архива не сработает.
+2. Распакуйте `artifacts\RhiGhAI-0.2.4-local-installer.zip` **целиком** — запуск `.cmd` прямо из окна просмотра архива не сработает.
 3. Запустите `Install RhiGhAI.cmd`.
 4. Откройте Rhino 8 и выполните команду `RhiGhAI`.
 
@@ -383,7 +383,7 @@ Remove-ItemProperty -Path $key -Name FileName -ErrorAction SilentlyContinue
    Больше никакие ветки реестра и никакие другие плагины Rhino не трогай.
 
 5. Скажи мне запустить Rhino 8 и выполнить команду: RhiGhAI
-   В шапке панели должно быть v0.2.3.
+   В шапке панели должно быть v0.2.4.
 
 Ограничения: не требуй прав администратора, не отключай Windows Defender и
 SmartScreen, не скачивай Codex runtime и не вписывай за меня API-ключ —
@@ -413,13 +413,13 @@ Structured output запрашивается строгой `json_schema`; пр�
 
 ## Что входит в MVP
 
-**Rhino:** box, polyline, planar surface, extrusion/Brep, ограниченные Boolean, copy/translation, слои и атрибуты. Изменение существующей модели — только для текущего выделения. Один успешный ответ целиком отменяется одним `Ctrl+Z`.
+**Rhino:** box, polyline, гладкая кривая, окружность, дуга, planar surface, extrusion, loft, sweep, pipe, revolve, скругление рёбер, ограниченные Boolean, copy/move/rotate/scale, слои и атрибуты. Изменение существующей модели — только для текущего выделения. Один успешный ответ целиком отменяется одним `Ctrl+Z`.
 
 **Grasshopper:** до 80 узлов и 240 связей, слайдер на каждый значимый параметр, собственная группа на холсте. Повторный запрос в том же диалоге заменяет предыдущий набор целиком, одним GH Undo.
 
 **Общее:** до пяти попыток самоисправления без остаточной геометрии, остановка и тайм-аут, продолжение диалога, читаемый листинг проверенного плана в ленте.
 
-Mesh, SubD, материалы, рендеринг, листы и блоки в 0.2.3 намеренно не входят.
+Mesh, SubD, материалы, рендеринг, листы и блоки в 0.2.4 намеренно не входят.
 
 ## Быстрая проверка
 
@@ -458,7 +458,7 @@ Issues и pull requests приветствуются. Пожалуйста, де
 
 ## Статус
 
-0.2.3 — MVP. Сборка не подписана и не опубликована в Yak. Она проверена на живой установке Rhino 8, но не проходила широкую clean-machine матрицу: относитесь к ней как к раннему софту и держите резервные копии важной работы.
+0.2.4 — MVP. Сборка не подписана и не опубликована в Yak. Она проверена на живой установке Rhino 8, но не проходила широкую clean-machine матрицу: относитесь к ней как к раннему софту и держите резервные копии важной работы.
 
 RhiGhAI не расчётный инструмент: он может выдать геометрически корректный результат, который неверен по существу задачи. Архитектор — по-прежнему вы.
 
