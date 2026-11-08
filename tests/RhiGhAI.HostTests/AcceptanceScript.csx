@@ -12,7 +12,7 @@ if (__rhino_doc__.Objects.Any(o => !o.IsDeleted) ||
     throw new Exception("Acceptance requires an empty, separate document saved as RhiGhAI-acceptance.3dm. Do not run in a working model.");
 var core = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "RhiGhAI.Core");
 var host = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "RhiGhAI.Rhino");
-if (host.GetName().Version.ToString() != "0.2.2.0") throw new Exception("Expected loaded RhiGhAI 0.2.2.");
+if (host.GetName().Version.ToString() != "0.2.3.0") throw new Exception("Expected loaded RhiGhAI 0.2.3.");
 var reportPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(__rhino_doc__.Path), "RHINO_ACCEPTANCE.txt");
 var planJson = core.GetType("RhiGhAI.Core.Contracts.TaskPlanJson");
 var compiler = core.GetType("RhiGhAI.Core.Graph.TaskPlanCompiler");

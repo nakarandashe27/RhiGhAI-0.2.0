@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$package = Join-Path $repo 'artifacts\RhiGhAI-0.2.2-local-installer'
+$package = Join-Path $repo 'artifacts\RhiGhAI-0.2.3-local-installer'
 $fixture = Join-Path $repo ('artifacts\installer-test-' + [Guid]::NewGuid().ToString('N'))
 $target = Join-Path $fixture 'Plug-ins\RhiGhAI'
 $backups = Join-Path $fixture 'Backups'

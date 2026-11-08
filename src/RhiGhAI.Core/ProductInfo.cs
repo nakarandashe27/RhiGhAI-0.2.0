@@ -4,7 +4,7 @@ namespace RhiGhAI.Core;
 public static class ProductInfo
 {
     public const string Name = "RhiGhAI";
-    public const string Version = "0.2.2";
+    public const string Version = "0.2.3";
     public const int MinimumRhinoMajor = 8;
     public const int MinimumRhinoMinor = 20;
     public const int TaskPlanSchemaVersion = 1;
