@@ -8,6 +8,8 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Parameters;
 using Grasshopper.Kernel.Special;
 using Grasshopper.Kernel.Types;
+using Grasshopper.Kernel.Undo;
+using Grasshopper.Kernel.Undo.Actions;
 using RhiGhAI.Core.Contracts;
 using RhiGhAI.Core.Graph;
 using Rhino;
@@ -39,12 +41,24 @@ public static class GrasshopperBridge
         return GhComponentCatalog.Load();
     }
 
-    public static GhEmitResult Emit(string ownershipId, GhGraphPlan plan)
+    public static GH_Document CaptureDocument()
+    {
+        EnsureEditor();
+        return ActiveDocument();
+    }
+
+    public static GhEmitResult Emit(string ownershipId, GhGraphPlan plan, GH_Document? expectedDocument = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
         GH_DocumentEditor editor = EnsureEditor();
         editor.Show();
         GH_Document document = ActiveDocument();
+        if (expectedDocument is not null && !ReferenceEquals(document, expectedDocument))
+        {
+            throw new GrasshopperExecutionException("StaleGrasshopperDocument", "Активное определение Grasshopper изменилось до выполнения.", new InvalidOperationException());
+        }
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Build and configure everything off-document first: a bad literal must not touch the canvas.
         Dictionary<string, IGH_DocumentObject> emitted = new(StringComparer.Ordinal);
@@ -57,7 +71,10 @@ public static class GrasshopperBridge
             // Asked again of the object Grasshopper actually built, so a stale or tampered catalogue
             // entry cannot be the single thing standing between a plan and arbitrary code.
             EnsureEmittable(instance.Name, instance.SubCategory);
-            if (instance is IGH_Component component && component.Params.Input.Count != node.Spec.Inputs.Count)
+            if (instance is IGH_Component component &&
+                (component.Params.Input.Count != node.Spec.Inputs.Count || component.Params.Output.Count != node.Spec.Outputs.Count ||
+                 !component.Params.Input.Select(param => param.Name).SequenceEqual(node.Spec.Inputs.Select(port => port.Name)) ||
+                 !component.Params.Output.Select(param => param.Name).SequenceEqual(node.Spec.Outputs.Select(port => port.Name))))
             {
                 // Port indices were resolved against the catalogue's instance of this component. A
                 // different shape here would move every literal and every wire one port along in silence.
@@ -82,39 +99,28 @@ public static class GrasshopperBridge
         // The group joins the additions before the undo record, so one Ctrl-Z removes it too.
         additions.Add(group);
         List<IGH_DocumentObject> removals = PreviousObjects(document, ownershipId);
-        int undoBefore = document.UndoServer.UndoCount;
-        bool recorded = false;
+        GH_UndoRecord record = new("RhiGhAI definition");
+        foreach (IGH_DocumentObject stale in removals) { record.AddAction(new GH_RemoveObjectAction(stale)); }
+        foreach (IGH_DocumentObject instance in additions) { record.AddAction(new GH_AddObjectAction(instance)); }
+        record.AddAction(new OwnershipUndoAction(ownershipId,
+            [.. removals.Select(item => item.InstanceGuid)], [.. additions.Select(item => item.InstanceGuid)]));
+        document.UndoUtil.RecordEvent(record);
+        if (!document.UndoServer.UndoGuids.Contains(record.Guid))
+        {
+            throw new GrasshopperExecutionException("GrasshopperUndoUnavailable", "Включите Undo в Grasshopper перед выполнением.", new InvalidOperationException());
+        }
         try
         {
-            if (removals.Count > 0)
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (IGH_DocumentObject stale in removals)
             {
-                document.UndoUtil.RecordRemoveObjectEvent("RhiGhAI definition", removals);
-                recorded = true;
-                foreach (IGH_DocumentObject stale in removals)
-                {
-                    document.RemoveObject(stale, false);
-                }
+                if (!document.RemoveObject(stale, false)) { throw new InvalidOperationException("Не удалось удалить прошлый результат Grasshopper."); }
             }
-
-            // Measured only now. Taken before the previous graph is gone, the bounding box still
-            // contains it and every repeat request lands one graph-width further to the right.
             PointF origin = Origin(document);
             foreach (GhResolvedNode node in plan.Nodes)
             {
                 emitted[node.Id].Attributes.Pivot = new PointF(origin.X + (node.Column * 260f), origin.Y + (node.Row * 120f));
             }
-
-            document.UndoUtil.RecordAddObjectEvent("RhiGhAI definition", additions);
-            if (recorded && document.UndoServer.UndoCount == undoBefore + 2)
-            {
-                // Merge only once both records have actually landed. Grasshopper keeps none of them at
-                // undo depth zero, and merging then would fold the user's previous action into ours.
-                document.UndoUtil.MergeRecords(2);
-            }
-
-            // Same reasoning as the merge above: with no record on the stack, the rollback below would
-            // reach past this attempt and undo whatever the user did last.
-            recorded = document.UndoServer.UndoCount > undoBefore;
             foreach (IGH_DocumentObject instance in additions)
             {
                 if (!document.AddObject(instance, false))
@@ -130,22 +136,28 @@ public static class GrasshopperBridge
                 target.AddSource(source);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+            document.NewSolution(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            string[] errors = additions.OfType<IGH_ActiveObject>()
+                .SelectMany(item => item.RuntimeMessages(GH_RuntimeMessageLevel.Error)).Take(8).ToArray();
+            if (errors.Length > 0)
+            {
+                throw new TaskPlanValidationException("GrasshopperSolutionFailed", string.Join("; ", errors));
+            }
             lock (Owned)
             {
                 Owned.GetOrCreateValue(document)[ownershipId] = [.. additions.Select(instance => instance.InstanceGuid)];
             }
-
-            document.NewSolution(false);
             return new GhEmitResult(plan.Nodes.Count, plan.Wires.Count);
         }
         catch (Exception exception)
         {
             try
             {
-                if (recorded)
-                {
-                    document.Undo();
-                }
+                // Undo this exact record directly: solution callbacks may have pushed unrelated records.
+                record.Undo(document);
+                document.UndoServer.RemoveRecord(record.Guid);
 
                 document.NewSolution(false);
             }
@@ -157,7 +169,7 @@ public static class GrasshopperBridge
                     new AggregateException(exception, rollbackException));
             }
 
-            if (exception is TaskPlanValidationException)
+            if (exception is TaskPlanValidationException or OperationCanceledException)
             {
                 throw;
             }
@@ -174,6 +186,23 @@ public static class GrasshopperBridge
             foreach (KeyValuePair<GH_Document, Dictionary<string, List<Guid>>> entry in Owned)
             {
                 entry.Value.Remove(ownershipId);
+            }
+        }
+    }
+
+    // Native Undo restores objects with their original GUIDs. Keep the ownership snapshot in the
+    // same record, so a follow-up after Undo replaces the graph that is actually on the canvas.
+    private sealed class OwnershipUndoAction(string ownershipId, List<Guid> before, List<Guid> after) : GH_UndoAction
+    {
+        protected override void Internal_Undo(GH_Document document) => Restore(document, before);
+        protected override void Internal_Redo(GH_Document document) => Restore(document, after);
+        private void Restore(GH_Document document, List<Guid> ids)
+        {
+            lock (Owned)
+            {
+                // Forget/new conversation explicitly releases this scope. Undo must not revive it.
+                if (Owned.TryGetValue(document, out Dictionary<string, List<Guid>>? scopes) && scopes.ContainsKey(ownershipId))
+                    scopes[ownershipId] = [.. ids];
             }
         }
     }

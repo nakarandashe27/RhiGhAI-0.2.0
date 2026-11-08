@@ -17,6 +17,7 @@ public static class RhinoPlanExecutor
             throw new RhinoExecutionException("WrongTargetHost", "Этот executor принимает только Rhino plans.");
         }
 
+        RhinoSnapshotBuilder.EnsureFresh(document, snapshot);
         Dictionary<string, List<GeometryBase>> prepared = PrepareGeometry(document, snapshot, graph, cancellationToken);
         HashSet<string> consumed = ConsumedIntermediateIds(graph);
         int outputCount = prepared.Where(pair => !consumed.Contains(pair.Key)).Sum(pair => pair.Value.Count);
@@ -35,6 +36,8 @@ public static class RhinoPlanExecutor
         }
 
         List<Guid> changed = [];
+        List<int> createdLayers = [];
+        uint nextUndoSerial = document.NextUndoRecordSerialNumber;
         bool ended = false;
         try
         {
@@ -44,23 +47,24 @@ public static class RhinoPlanExecutor
                 switch (node.TypedOperation)
                 {
                     case EnsureLayerOperation layer:
-                        _ = EnsureLayer(document, layer.Name);
+                        _ = EnsureLayer(document, layer.Name, createdLayers);
                         break;
                     case TransformOperation transform:
-                        ApplyTransform(document, snapshot, transform, changed);
+                        ApplyTransform(document, snapshot, transform, changed, createdLayers);
                         break;
                     case SetAttributesOperation attributes:
-                        ApplyAttributes(document, snapshot, attributes, changed);
+                        ApplyAttributes(document, snapshot, attributes, changed, createdLayers);
                         break;
                     case CopyOperation:
-                        AddPrepared(document, node, prepared, consumed, changed);
+                        AddPrepared(document, node, prepared, consumed, changed, createdLayers);
                         break;
                     default:
-                        AddPrepared(document, node, prepared, consumed, changed);
+                        AddPrepared(document, node, prepared, consumed, changed, createdLayers);
                         break;
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             ended = document.EndUndoRecord(undoSerial);
             if (!ended)
             {
@@ -79,7 +83,8 @@ public static class RhinoPlanExecutor
 
             // Rhino discards an empty undo record, so an unconditional Undo() here would roll back
             // whatever the user did before RhiGhAI ran. Only undo a record that actually wrote.
-            if (changed.Count > 0 && !document.Undo())
+            if ((changed.Count > 0 || createdLayers.Count > 0) &&
+                (document.NextUndoRecordSerialNumber != nextUndoSerial || document.UndoRecordingIsActive || !document.Undo()))
             {
                 throw new RhinoExecutionException("RollbackFailed", "Не удалось откатить собственный Undo record; новые операции заблокированы.");
             }
@@ -227,7 +232,7 @@ public static class RhinoPlanExecutor
         OperationNode node,
         IReadOnlyDictionary<string, List<GeometryBase>> prepared,
         IReadOnlySet<string> consumed,
-        ICollection<Guid> changed)
+        ICollection<Guid> changed, ICollection<int> createdLayers)
     {
         if (consumed.Contains(node.NodeId) || !prepared.TryGetValue(node.NodeId, out List<GeometryBase>? geometry))
         {
@@ -235,7 +240,7 @@ public static class RhinoPlanExecutor
         }
 
         string? layerName = LayerFor(node.TypedOperation);
-        int? layerIndex = layerName is null ? null : EnsureLayer(document, layerName);
+        int? layerIndex = layerName is null ? null : EnsureLayer(document, layerName, createdLayers);
         foreach (GeometryBase item in geometry)
         {
             ObjectAttributes attributes = document.CreateDefaultAttributes();
@@ -259,11 +264,11 @@ public static class RhinoPlanExecutor
         }
     }
 
-    private static void ApplyTransform(RhinoDoc document, RhinoContextSnapshot snapshot, TransformOperation operation, ICollection<Guid> changed)
+    private static void ApplyTransform(RhinoDoc document, RhinoContextSnapshot snapshot, TransformOperation operation, ICollection<Guid> changed, ICollection<int> createdLayers)
     {
         Transform translation = Transform.Translation(operation.Translation.X, operation.Translation.Y, operation.Translation.Z);
         Dictionary<string, SelectedObjectSnapshot> selected = snapshot.Selection.ToDictionary(item => item.ReferenceId, StringComparer.Ordinal);
-        int? targetLayer = operation.Layer is null ? null : EnsureLayer(document, operation.Layer);
+        int? targetLayer = operation.Layer is null ? null : EnsureLayer(document, operation.Layer, createdLayers);
         foreach (string reference in operation.References)
         {
             if (!selected.TryGetValue(reference, out SelectedObjectSnapshot? item))
@@ -277,6 +282,7 @@ public static class RhinoPlanExecutor
                 throw new RhinoExecutionException("TransformFailed", "Rhino не выполнил transform.");
             }
 
+            changed.Add(transformedId);
             if (targetLayer.HasValue)
             {
                 RhinoObject transformed = document.Objects.FindId(transformedId) ?? throw new RhinoExecutionException("MissingObject", "Transform result исчез.");
@@ -288,14 +294,13 @@ public static class RhinoPlanExecutor
                 }
             }
 
-            changed.Add(transformedId);
         }
     }
 
-    private static void ApplyAttributes(RhinoDoc document, RhinoContextSnapshot snapshot, SetAttributesOperation operation, ICollection<Guid> changed)
+    private static void ApplyAttributes(RhinoDoc document, RhinoContextSnapshot snapshot, SetAttributesOperation operation, ICollection<Guid> changed, ICollection<int> createdLayers)
     {
         Dictionary<string, SelectedObjectSnapshot> selected = snapshot.Selection.ToDictionary(item => item.ReferenceId, StringComparer.Ordinal);
-        int layerIndex = EnsureLayer(document, operation.Layer);
+        int layerIndex = EnsureLayer(document, operation.Layer, createdLayers);
         foreach (string reference in operation.References)
         {
             if (!selected.TryGetValue(reference, out SelectedObjectSnapshot? item))
@@ -315,7 +320,7 @@ public static class RhinoPlanExecutor
         }
     }
 
-    private static int EnsureLayer(RhinoDoc document, string name)
+    private static int EnsureLayer(RhinoDoc document, string name, ICollection<int> createdLayers)
     {
         Layer? existing = document.Layers.FindName(name);
         if (existing is not null)
@@ -329,6 +334,7 @@ public static class RhinoPlanExecutor
             throw new RhinoExecutionException("LayerFailed", $"Не удалось создать слой {name}.");
         }
 
+        createdLayers.Add(index);
         return index;
     }
 

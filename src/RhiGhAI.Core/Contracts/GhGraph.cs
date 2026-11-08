@@ -32,7 +32,8 @@ public sealed record GhComponentSpec(
     string SubCategory,
     string Description,
     IReadOnlyList<GhPortSpec> Inputs,
-    IReadOnlyList<GhPortSpec> Outputs)
+    IReadOnlyList<GhPortSpec> Outputs,
+    bool IsParameter = false)
 {
     /// <summary>Sliders, panels and toggles carry settings instead of input ports.</summary>
     public GhSpecialKind Special => Name switch

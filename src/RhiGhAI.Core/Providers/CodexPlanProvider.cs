@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using RhiGhAI.Core.Codex;
@@ -11,13 +10,19 @@ namespace RhiGhAI.Core.Providers;
 /// </summary>
 public sealed class CodexPlanProvider : IPlanProvider
 {
-    private readonly CodexRuntimeManager _runtime = new();
-    private readonly ConcurrentDictionary<string, CompletedTurn> _earlyCompletedTurns = new(StringComparer.Ordinal);
-    private CodexAppServerClient? _client;
-    private TaskCompletionSource<CompletedTurn>? _turnCompletion;
-    private volatile string? _lastAgentMessage;
+    private readonly CodexRuntimeManager _runtime;
+    private readonly Func<ICodexAppServerClient> _createClient;
+    private ICodexAppServerClient? _client;
     private string? _activeTurnId;
+    private string? _activeThreadId;
     private bool _threadNeedsResume;
+
+    public CodexPlanProvider() : this(new CodexRuntimeManager(), () => new CodexAppServerClient()) { }
+    internal CodexPlanProvider(CodexRuntimeManager runtime, Func<ICodexAppServerClient> createClient)
+    {
+        _runtime = runtime;
+        _createClient = createClient;
+    }
 
     public ProviderKind Kind => ProviderKind.Codex;
 
@@ -32,12 +37,13 @@ public sealed class CodexPlanProvider : IPlanProvider
 
     public async Task<ProviderStatus> ConnectAsync(CancellationToken cancellationToken)
     {
-        RuntimeStatus runtime = _runtime.Inspect();
-        if (runtime.State != RuntimeState.Ready)
+        if (_activeThreadId is not null) { throw new InvalidOperationException("Нельзя обновлять Codex во время задачи."); }
+        if (_client is not null)
         {
-            runtime = await _runtime.PrepareAsync(null, cancellationToken).ConfigureAwait(false);
+            await _client.DisposeAsync().ConfigureAwait(false);
+            _client = null;
         }
-
+        RuntimeStatus runtime = await _runtime.PrepareAsync(null, cancellationToken).ConfigureAwait(false);
         Runtime = runtime;
         if (runtime.State != RuntimeState.Ready || runtime.ExecutablePath is null)
         {
@@ -46,7 +52,15 @@ public sealed class CodexPlanProvider : IPlanProvider
             return new ProviderStatus(false, runtime.Message, "Codex не найден", null, []);
         }
 
-        await EnsureClientAsync(cancellationToken).ConfigureAwait(false);
+        try { await EnsureClientAsync(cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is CodexProtocolException or IOException or InvalidOperationException)
+        {
+            if (_client is not null) { await _client.DisposeAsync().ConfigureAwait(false); _client = null; }
+            if (!await _runtime.RestorePreviousAsync(cancellationToken).ConfigureAwait(false)) { throw; }
+            runtime = _runtime.Inspect() with { Message = "Новый Codex не запустился; восстановлен предыдущий подписанный runtime." };
+            await EnsureClientAsync(cancellationToken).ConfigureAwait(false);
+        }
+        Runtime = runtime;
         Account = await _client!.ReadAccountAsync(false, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<CodexModel> models = await _client.ListModelsAsync(cancellationToken).ConfigureAwait(false);
         RateLimits = Account.Account is null ? null : await ReadRateLimitsSafeAsync(cancellationToken).ConfigureAwait(false);
@@ -54,8 +68,8 @@ public sealed class CodexPlanProvider : IPlanProvider
         string account = Account.Account is { } item ? $"{item.Email ?? item.Type} · {item.PlanType ?? "ChatGPT"}" : "вход не выполнен";
         string usage = RateLimits?.Primary is { } primary ? $"{primary.UsedPercent:0}%" : "—";
         return new ProviderStatus(
-            Account.Account is not null,
-            $"{runtime.Message}\nАккаунт: {account}",
+            Account.Account?.Type == "chatgpt" && models.Count > 0,
+            $"{runtime.Message}\nАккаунт: {account}" + (models.Count == 0 ? "\nКаталог моделей пуст: обновите Codex и состояние подключения." : string.Empty),
             account,
             usage,
             [.. models.Select(model => new ProviderModel(
@@ -69,65 +83,57 @@ public sealed class CodexPlanProvider : IPlanProvider
     public async Task<string> RequestJsonAsync(PlanRequest request, CancellationToken cancellationToken)
     {
         await EnsureClientAsync(cancellationToken).ConfigureAwait(false);
-        if (Account?.Account is null)
+        if (Account?.Account?.Type != "chatgpt")
         {
             throw new ProviderException("CodexLoginRequired", "Требуется вход в аккаунт ChatGPT.");
         }
-
-        if (ThreadId is null)
+        string threadId;
+        if (request.Stateless || ThreadId is null)
         {
-            CodexThread thread = await _client!.StartThreadAsync(request.Model, _runtime.EmptyWorkingDirectory, cancellationToken).ConfigureAwait(false);
-            ThreadId = thread.Id;
-            _threadNeedsResume = false;
+            CodexThread thread = await _client!.StartThreadAsync(request.Model, _runtime.EmptyWorkingDirectory, cancellationToken, request.Stateless).ConfigureAwait(false);
+            threadId = thread.Id;
+            if (!request.Stateless) { ThreadId = threadId; _threadNeedsResume = false; }
         }
-        else if (_threadNeedsResume)
+        else
         {
-            CodexThread thread = await _client!.ResumeThreadAsync(ThreadId, request.Model, _runtime.EmptyWorkingDirectory, cancellationToken).ConfigureAwait(false);
-            ThreadId = thread.Id;
-            _threadNeedsResume = false;
+            if (_threadNeedsResume)
+            {
+                CodexThread thread = await _client!.ResumeThreadAsync(ThreadId, request.Model, _runtime.EmptyWorkingDirectory, cancellationToken).ConfigureAwait(false);
+                ThreadId = thread.Id;
+                _threadNeedsResume = false;
+            }
+            threadId = ThreadId;
         }
-
-        TaskCompletionSource<CompletedTurn> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        _lastAgentMessage = null;
-        _turnCompletion = completion;
-        CodexTurn turn = await _client!.StartTurnAsync(
-            ThreadId!,
-            request.Prompt,
-            request.Model,
-            request.Effort,
-            request.OutputSchema,
-            _runtime.EmptyWorkingDirectory,
-            cancellationToken).ConfigureAwait(false);
-        _activeTurnId = turn.Id;
-        if (_earlyCompletedTurns.TryRemove(turn.Id, out CompletedTurn? early))
-        {
-            completion.TrySetResult(early);
-        }
-
-        CompletedTurn completed;
+        ICodexAppServerClient client = _client!;
+        CodexTurnCollector collector = new(threadId);
+        void OnNotification(object? sender, CodexNotification notification) => collector.Accept(notification);
+        void OnClosed(object? sender, EventArgs args) => collector.Fail(new IOException("Codex завершился до окончания ответа."));
+        client.NotificationReceived += OnNotification;
+        client.TransportClosed += OnClosed;
+        _activeThreadId = threadId;
+        bool succeeded = false;
         try
         {
-            completed = await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            CodexTurn turn = await client.StartTurnAsync(threadId, request.Prompt, request.Model, request.Effort,
+                request.OutputSchema, _runtime.EmptyWorkingDirectory, cancellationToken).ConfigureAwait(false);
+            _activeTurnId = turn.Id;
+            collector.SetTurn(turn.Id);
+            string answer = await collector.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+            succeeded = true;
+            return answer;
         }
         finally
         {
-            // Cancellation, a timeout and ForbiddenToolItem all leave through here. Without the reset
-            // Interrupt() would keep addressing a dead turn id for the rest of the session.
-            _turnCompletion = null;
+            if (!succeeded)
+            {
+                if (_activeTurnId is { } turnId) { await InterruptSafeAsync(client, threadId, turnId).ConfigureAwait(false); }
+                else { client.Terminate(); }
+            }
+            client.NotificationReceived -= OnNotification;
+            client.TransportClosed -= OnClosed;
+            _activeThreadId = null;
             _activeTurnId = null;
         }
-
-        if (!string.Equals(completed.Status, "completed", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new CodexProtocolException(completed.Error ?? $"Codex turn завершён со статусом {completed.Status}.");
-        }
-
-        if (string.IsNullOrWhiteSpace(completed.Text))
-        {
-            throw new CodexProtocolException("Codex не вернул структурированный ответ.");
-        }
-
-        return completed.Text;
     }
 
     public void ResetConversation()
@@ -138,7 +144,7 @@ public sealed class CodexPlanProvider : IPlanProvider
 
     public void Interrupt()
     {
-        string? threadId = ThreadId;
+        string? threadId = _activeThreadId;
         string? turnId = _activeTurnId;
         if (_client is not null && threadId is not null && turnId is not null)
         {
@@ -148,6 +154,8 @@ public sealed class CodexPlanProvider : IPlanProvider
 
     public async Task PrepareRuntimeAsync(IProgress<double>? progress, CancellationToken cancellationToken)
     {
+        if (_activeThreadId is not null) { throw new InvalidOperationException("Сначала остановите задачу."); }
+        if (_client is not null) { await _client.DisposeAsync().ConfigureAwait(false); _client = null; }
         Runtime = await _runtime.PrepareAsync(progress, cancellationToken).ConfigureAwait(false);
         if (Runtime.State != RuntimeState.Ready)
         {
@@ -184,6 +192,7 @@ public sealed class CodexPlanProvider : IPlanProvider
             await _client.DisposeAsync().ConfigureAwait(false);
             _client = null;
         }
+        _runtime.Dispose();
     }
 
     private async Task EnsureClientAsync(CancellationToken cancellationToken)
@@ -205,8 +214,7 @@ public sealed class CodexPlanProvider : IPlanProvider
             await _client.DisposeAsync().ConfigureAwait(false);
         }
 
-        _client = new CodexAppServerClient();
-        _client.NotificationReceived += OnCodexNotification;
+        _client = _createClient();
         await _client.StartAsync(runtime.ExecutablePath, _runtime.EmptyWorkingDirectory, cancellationToken).ConfigureAwait(false);
         _threadNeedsResume = ThreadId is not null;
     }
@@ -223,93 +231,17 @@ public sealed class CodexPlanProvider : IPlanProvider
         }
     }
 
-    private static async Task InterruptSafeAsync(CodexAppServerClient client, string threadId, string turnId)
+    private static async Task InterruptSafeAsync(ICodexAppServerClient client, string threadId, string turnId)
     {
         try
         {
-            await client.InterruptTurnAsync(threadId, turnId, CancellationToken.None).ConfigureAwait(false);
+            using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(5));
+            await client.InterruptTurnAsync(threadId, turnId, timeout.Token).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is CodexProtocolException or InvalidOperationException or IOException or OperationCanceledException)
+        catch (Exception exception) when (exception is CodexProtocolException or InvalidOperationException or IOException or OperationCanceledException or ObjectDisposedException)
         {
             // Cancellation must remain safe even if app-server has already exited.
         }
     }
 
-    private void OnCodexNotification(object? sender, CodexNotification notification)
-    {
-        if (notification.Parameters.ValueKind != JsonValueKind.Object)
-        {
-            return;
-        }
-
-        if (notification.Method is "item/started" or "item/completed" &&
-            notification.Parameters.TryGetProperty("item", out JsonElement item) &&
-            item.ValueKind == JsonValueKind.Object)
-        {
-            string type = Text(item, "type") ?? string.Empty;
-            if (type is not ("userMessage" or "agentMessage" or "reasoning"))
-            {
-                _turnCompletion?.TrySetException(
-                    new ProviderException("ForbiddenToolItem", $"Codex попытался использовать запрещённый item: {type}."));
-                Interrupt();
-            }
-            else if (type == "agentMessage" && notification.Method == "item/completed" && Text(item, "text") is { Length: > 0 } itemText)
-            {
-                // turn/completed may arrive with itemsView "notLoaded"; the item event is the reliable source.
-                _lastAgentMessage = itemText;
-            }
-        }
-
-        if (notification.Method != "turn/completed" ||
-            !notification.Parameters.TryGetProperty("turn", out JsonElement turn) ||
-            turn.ValueKind != JsonValueKind.Object)
-        {
-            return;
-        }
-
-        string id = Text(turn, "id") ?? string.Empty;
-        string status = Text(turn, "status") ?? "failed";
-        string? text = null;
-        if (turn.TryGetProperty("items", out JsonElement items) && items.ValueKind == JsonValueKind.Array)
-        {
-            foreach (JsonElement completedItem in items.EnumerateArray())
-            {
-                if (completedItem.ValueKind == JsonValueKind.Object && Text(completedItem, "type") == "agentMessage")
-                {
-                    text = Text(completedItem, "text") ?? text;
-                }
-            }
-        }
-
-        text ??= _lastAgentMessage;
-        _lastAgentMessage = null;
-        string? error = turn.TryGetProperty("error", out JsonElement errorElement) && errorElement.ValueKind != JsonValueKind.Null
-            ? Text(errorElement, "message") ?? errorElement.GetRawText()
-            : null;
-        CompletedTurn completed = new(id, status, text, error);
-        if (string.Equals(id, _activeTurnId, StringComparison.Ordinal))
-        {
-            _turnCompletion?.TrySetResult(completed);
-        }
-        else
-        {
-            // Only the turn currently starting can still claim one of these. Interrupted turns are
-            // never claimed, so the dictionary is bounded rather than left to grow all session.
-            if (_earlyCompletedTurns.Count >= 16)
-            {
-                _earlyCompletedTurns.Clear();
-            }
-
-            _earlyCompletedTurns[id] = completed;
-        }
-    }
-
-    private static string? Text(JsonElement element, string propertyName) =>
-        element.ValueKind == JsonValueKind.Object &&
-        element.TryGetProperty(propertyName, out JsonElement value) &&
-        value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    private sealed record CompletedTurn(string Id, string Status, string? Text, string? Error);
 }

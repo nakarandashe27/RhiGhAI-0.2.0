@@ -61,3 +61,21 @@ public sealed class ProviderException(string code, string message, Exception? in
 {
     public string Code { get; } = code;
 }
+
+public static class ProviderModelSelection
+{
+    public static int ModelIndex(IReadOnlyList<ProviderModel> models, string? preferredId)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        for (int index = 0; index < models.Count; index++) { if (models[index].Id == preferredId) { return index; } }
+        for (int index = 0; index < models.Count; index++) { if (models[index].IsDefault) { return index; } }
+        return models.Count == 0 ? -1 : 0;
+    }
+    public static int EffortIndex(ProviderModel model, string? preferredId)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        for (int index = 0; index < model.Efforts.Count; index++) { if (model.Efforts[index] == preferredId) { return index; } }
+        for (int index = 0; index < model.Efforts.Count; index++) { if (model.Efforts[index] == model.DefaultEffort) { return index; } }
+        return model.Efforts.Count == 0 ? -1 : 0;
+    }
+}

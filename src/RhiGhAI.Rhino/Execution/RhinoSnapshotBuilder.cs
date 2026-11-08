@@ -46,13 +46,14 @@ public static class RhinoSnapshotBuilder
             document.ModelAbsoluteTolerance,
             document.ModelAngleToleranceRadians,
             layers.Order(StringComparer.Ordinal).ToArray(),
-            selection);
+            selection, document.Path);
     }
 
     public static void EnsureFresh(RhinoDoc document, RhinoContextSnapshot snapshot)
     {
         if (document.RuntimeSerialNumber != snapshot.DocumentRuntimeSerial ||
             RhinoDoc.ActiveDoc?.RuntimeSerialNumber != snapshot.DocumentRuntimeSerial ||
+            !string.Equals(document.Path, snapshot.DocumentPath, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(document.ModelUnitSystem.ToString(), snapshot.UnitSystem, StringComparison.Ordinal) ||
             document.ModelAbsoluteTolerance != snapshot.AbsoluteTolerance ||
             document.ModelAngleToleranceRadians != snapshot.AngleToleranceRadians)

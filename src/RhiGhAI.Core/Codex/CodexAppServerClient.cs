@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace RhiGhAI.Core.Codex;
 
-public sealed class CodexAppServerClient : IAsyncDisposable
+public sealed class CodexAppServerClient : ICodexAppServerClient
 {
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -13,6 +13,8 @@ public sealed class CodexAppServerClient : IAsyncDisposable
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private Process? _process;
     private Task? _stdoutLoop;
+    private Task? _stderrLoop;
+    public event EventHandler? TransportClosed;
     private long _nextId;
     private int _terminated;
     private int _disposed;
@@ -20,7 +22,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
     public event EventHandler<CodexNotification>? NotificationReceived;
     public event EventHandler<string>? DiagnosticReceived;
 
-    public bool IsRunning => _process is { HasExited: false };
+    public bool IsRunning => _process is { HasExited: false } && _stdoutLoop is not { IsCompleted: true };
 
     public async Task StartAsync(string executablePath, string workingDirectory, CancellationToken cancellationToken)
     {
@@ -48,8 +50,10 @@ public sealed class CodexAppServerClient : IAsyncDisposable
 
         _process = Process.Start(startInfo) ?? throw new InvalidOperationException("Не удалось запустить Codex app-server.");
         _stdoutLoop = ReadStdoutAsync(_process, _lifetime.Token);
-        _ = ReadStderrAsync(_process, _lifetime.Token);
+        _stderrLoop = ReadStderrAsync(_process, _lifetime.Token);
 
+        try
+        {
         await RequestAsync(
             "initialize",
             new
@@ -59,6 +63,12 @@ public sealed class CodexAppServerClient : IAsyncDisposable
             },
             cancellationToken).ConfigureAwait(false);
         await NotifyAsync("initialized", new { }, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            Terminate();
+            throw;
+        }
     }
 
     public async Task<CodexAccountSnapshot> ReadAccountAsync(bool refreshToken, CancellationToken cancellationToken)
@@ -79,26 +89,9 @@ public sealed class CodexAppServerClient : IAsyncDisposable
 
     public async Task<IReadOnlyList<CodexModel>> ListModelsAsync(CancellationToken cancellationToken)
     {
-        JsonElement result = await RequestAsync("model/list", new { includeHidden = false }, cancellationToken).ConfigureAwait(false);
-        List<CodexModel> models = [];
-        foreach (JsonElement modelElement in result.GetProperty("data").EnumerateArray())
-        {
-            List<CodexReasoningEffort> efforts = [];
-            foreach (JsonElement effort in modelElement.GetProperty("supportedReasoningEfforts").EnumerateArray())
-            {
-                efforts.Add(new CodexReasoningEffort(RequiredString(effort, "reasoningEffort"), RequiredString(effort, "description")));
-            }
-
-            models.Add(new CodexModel(
-                RequiredString(modelElement, "id"),
-                RequiredString(modelElement, "displayName"),
-                RequiredString(modelElement, "description"),
-                efforts,
-                RequiredString(modelElement, "defaultReasoningEffort"),
-                modelElement.TryGetProperty("isDefault", out JsonElement defaultElement) && defaultElement.GetBoolean()));
-        }
-
-        return models;
+        return await CodexModelCatalog.ReadAsync(
+            (cursor, token) => RequestAsync("model/list", new { cursor, limit = 50, includeHidden = false }, token),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<CodexRateLimits?> ReadRateLimitsAsync(CancellationToken cancellationToken)
@@ -126,7 +119,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
 
     public Task LogoutAsync(CancellationToken cancellationToken) => RequestNoResultAsync("account/logout", null, cancellationToken);
 
-    public async Task<CodexThread> StartThreadAsync(string model, string workingDirectory, CancellationToken cancellationToken)
+    public async Task<CodexThread> StartThreadAsync(string model, string workingDirectory, CancellationToken cancellationToken, bool ephemeral = false)
     {
         JsonElement result = await RequestAsync(
             "thread/start",
@@ -139,6 +132,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                 environments = Array.Empty<object>(),
                 selectedCapabilityRoots = Array.Empty<object>(),
                 personality = "none",
+                ephemeral,
                 serviceName = "rhigai"
             },
             cancellationToken).ConfigureAwait(false);
@@ -261,7 +255,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                 catch (JsonException)
                 {
                     // app-server occasionally prints non-protocol text; skipping keeps the transport alive.
-                    DiagnosticReceived?.Invoke(this, line);
+                    EmitDiagnostic("Codex diagnostic output omitted.");
                     continue;
                 }
 
@@ -273,7 +267,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                         continue;
                     }
 
-                    if (root.TryGetProperty("id", out JsonElement idElement) && idElement.TryGetInt64(out long id) && _pending.TryGetValue(id, out TaskCompletionSource<JsonElement>? source))
+                    if (root.TryGetProperty("id", out JsonElement idElement) && idElement.ValueKind == JsonValueKind.Number && idElement.TryGetInt64(out long id) && _pending.TryGetValue(id, out TaskCompletionSource<JsonElement>? source))
                     {
                         if (root.TryGetProperty("error", out JsonElement error))
                         {
@@ -304,7 +298,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                         catch (Exception handlerException)
                         {
                             // A subscriber must never be able to tear down the only stdout reader.
-                            DiagnosticReceived?.Invoke(this, $"notification handler failed: {handlerException}");
+                            EmitDiagnostic($"Codex notification handler failed: {handlerException.GetType().Name}.");
                         }
                     }
                 }
@@ -321,6 +315,7 @@ public sealed class CodexAppServerClient : IAsyncDisposable
         if (!cancellationToken.IsCancellationRequested)
         {
             FailPending(new EndOfStreamException("Codex app-server closed stdout."));
+            TransportClosed?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -336,12 +331,18 @@ public sealed class CodexAppServerClient : IAsyncDisposable
                     break;
                 }
 
-                DiagnosticReceived?.Invoke(this, line);
+                EmitDiagnostic("Codex diagnostic output omitted.");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+    }
+
+    private void EmitDiagnostic(string message)
+    {
+        try { DiagnosticReceived?.Invoke(this, message); }
+        catch (Exception exception) when (exception is not OutOfMemoryException) { }
     }
 
     private void FailPending(Exception exception)
@@ -428,7 +429,14 @@ public sealed class CodexAppServerClient : IAsyncDisposable
             }
         }
 
+        if (_stderrLoop is not null)
+        {
+            try { await _stderrLoop.ConfigureAwait(false); }
+            catch (Exception exception) when (exception is IOException or OperationCanceledException or ObjectDisposedException) { }
+        }
+
         _process?.Dispose();
+        _process = null;
         _writeLock.Dispose();
         _lifetime.Dispose();
     }

@@ -49,28 +49,23 @@ public sealed class GhComponentCatalog : IGhCatalog
 
     private GhComponentCatalog(IReadOnlyList<GhComponentSpec> all)
     {
-        _all = all;
         _byName = new Dictionary<string, GhComponentSpec>(StringComparer.OrdinalIgnoreCase);
 
-        // Two plug-ins may both publish a "Circle" or a "Series". Whoever happened to be enumerated
-        // first used to win, which depends on .gha load order; Grasshopper's own tabs win instead, so
-        // the prompt and the canvas agree on what a bare name means.
-        foreach (GhComponentSpec spec in all)
-        {
-            if (CoreCategories.Contains(spec.Category, StringComparer.OrdinalIgnoreCase))
-            {
-                _byName.TryAdd(spec.Name, spec);
-            }
-        }
-
-        foreach (GhComponentSpec spec in all)
+        // Prefer native components to same-name floating parameters (Rectangle, Circle).
+        // Stable GUID ordering resolves remaining ties independently of library load order.
+        foreach (GhComponentSpec spec in all
+            .OrderByDescending(spec => CoreCategories.Contains(spec.Category, StringComparer.OrdinalIgnoreCase))
+            .ThenBy(spec => spec.IsParameter)
+            .ThenBy(spec => spec.ComponentGuid))
         {
             _byName.TryAdd(spec.Name, spec);
         }
 
-        foreach (GhComponentSpec spec in all)
+        // The prompt must describe exactly the object TryFind will return. Advertising both
+        // Rectangle variants under one name sends the model ports the selected object lacks.
+        _all = _byName.Values.ToArray();
+        foreach (GhComponentSpec spec in _all)
         {
-            // Nicknames are ambiguous (and sometimes empty), so they only fill gaps left by real names.
             if (!string.IsNullOrWhiteSpace(spec.NickName))
             {
                 _byName.TryAdd(spec.NickName, spec);
@@ -248,7 +243,8 @@ public sealed class GhComponentCatalog : IGhCatalog
                 description.SubCategory ?? string.Empty,
                 description.Description ?? string.Empty,
                 inputs,
-                outputs);
+                outputs,
+                instance is IGH_Param);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {

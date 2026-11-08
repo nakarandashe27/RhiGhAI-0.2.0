@@ -9,6 +9,7 @@ using RhiGhAI.Core.Providers;
 using RhiGhAI.Grasshopper;
 using RhiGhAI.Rhino.Execution;
 using Rhino;
+using Grasshopper.Kernel;
 
 namespace RhiGhAI.Rhino.Services;
 
@@ -25,6 +26,7 @@ public sealed record ConnectionSnapshot(
 
 public sealed class RhiGhAIService : IAsyncDisposable
 {
+    private readonly SemaphoreSlim _providerGate = new(1, 1);
     private readonly LocalStateStore _state = new();
     private readonly SecretStore _secrets = new();
     private readonly object _transcriptQueueGate = new();
@@ -63,7 +65,31 @@ public sealed class RhiGhAIService : IAsyncDisposable
         }
     }
 
-    public async Task RefreshAsync(CancellationToken cancellationToken)
+    public Task RefreshAsync(CancellationToken token) => SerializeAsync(() => RefreshCoreAsync(token), token);
+    public Task PrepareRuntimeAsync(IProgress<double>? progress, CancellationToken token) => SerializeAsync(() => PrepareRuntimeCoreAsync(progress, token), token);
+    public async Task<Uri> LoginAsync(CancellationToken token)
+    {
+        await _providerGate.WaitAsync(token).ConfigureAwait(false);
+        try { return await LoginCoreAsync(token).ConfigureAwait(false); }
+        finally { _providerGate.Release(); }
+    }
+    public Task LogoutAsync(CancellationToken token) => SerializeAsync(() => LogoutCoreAsync(token), token);
+    public Task SaveSettingsAsync(RhiGhAISettings settings, string? apiKey, CancellationToken token) => SerializeAsync(() => SaveSettingsCoreAsync(settings, apiKey, token), token);
+    public Task SaveSelectionAsync(string model, string effort) => SerializeAsync(() =>
+    {
+        Settings = Settings with { ModelId = model, EffortId = effort };
+        _state.SaveSettings(Settings);
+        return Task.CompletedTask;
+    }, CancellationToken.None);
+    private Task SerializeAsync(Func<Task> action, CancellationToken token) => Task.Run(async () =>
+    {
+        if (_activeTurnCancellation is not null) { throw new InvalidOperationException("Сначала остановите текущую задачу."); }
+        await _providerGate.WaitAsync(token).ConfigureAwait(false);
+        try { await action().ConfigureAwait(false); }
+        finally { _providerGate.Release(); }
+    }, token);
+
+    private async Task RefreshCoreAsync(CancellationToken cancellationToken)
     {
         ProviderStatus status = await _provider.ConnectAsync(cancellationToken).ConfigureAwait(false);
         SetConnection(new ConnectionSnapshot(
@@ -76,7 +102,7 @@ public sealed class RhiGhAIService : IAsyncDisposable
             Codex?.Runtime));
     }
 
-    public async Task PrepareRuntimeAsync(IProgress<double>? progress, CancellationToken cancellationToken)
+    private async Task PrepareRuntimeCoreAsync(IProgress<double>? progress, CancellationToken cancellationToken)
     {
         if (Codex is not { } codex)
         {
@@ -84,10 +110,10 @@ public sealed class RhiGhAIService : IAsyncDisposable
         }
 
         await codex.PrepareRuntimeAsync(progress, cancellationToken).ConfigureAwait(false);
-        await RefreshAsync(cancellationToken).ConfigureAwait(false);
+        await RefreshCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<Uri> LoginAsync(CancellationToken cancellationToken)
+    private async Task<Uri> LoginCoreAsync(CancellationToken cancellationToken)
     {
         if (Codex is not { } codex)
         {
@@ -97,17 +123,17 @@ public sealed class RhiGhAIService : IAsyncDisposable
         return await codex.LoginAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task LogoutAsync(CancellationToken cancellationToken)
+    private async Task LogoutCoreAsync(CancellationToken cancellationToken)
     {
         if (Codex is { } codex)
         {
             await codex.LogoutAsync(cancellationToken).ConfigureAwait(false);
-            await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            await RefreshCoreAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
     /// <summary>Saves settings and rebuilds the provider; the API key is stored encrypted, never in settings.json.</summary>
-    public async Task SaveSettingsAsync(RhiGhAISettings settings, string? apiKey, CancellationToken cancellationToken)
+    private async Task SaveSettingsCoreAsync(RhiGhAISettings settings, string? apiKey, CancellationToken cancellationToken)
     {
         if (_activeTurnCancellation is not null)
         {
@@ -138,25 +164,21 @@ public sealed class RhiGhAIService : IAsyncDisposable
         _provider = CreateProvider(validated);
         await previous.DisposeAsync().ConfigureAwait(false);
         SetConnection(Disconnected(validated.Provider));
-        await RefreshAsync(cancellationToken).ConfigureAwait(false);
+        await RefreshCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public void StartNewConversation(RhinoDoc? document)
+    public Task StartNewConversationAsync(uint documentSerial, string documentPath) => SerializeAsync(() =>
     {
-        Stop();
         _provider.ResetConversation();
-        if (document is not null)
-        {
-            _state.ClearThread(document.Path);
-            _boundDocumentSerial = document.RuntimeSerialNumber;
-            _boundDocumentPath = document.Path;
-        }
-
+        _state.ClearThread(documentPath);
+        _boundDocumentSerial = documentSerial;
+        _boundDocumentPath = documentPath;
         StartOwnership(Guid.NewGuid());
         _correlationId = Guid.NewGuid();
         _activeAttemptNo = 0;
         OnMessage(new ServiceMessage("system", "Новый диалог начат. Следующий результат получит новую область владения."));
-    }
+        return Task.CompletedTask;
+    }, CancellationToken.None);
 
     /// <summary>Takes a path rather than a document: the caller reads it on the UI thread, this runs off it.</summary>
     public IReadOnlyList<ServiceMessage> RestoreTranscript(string? documentPath)
@@ -192,6 +214,7 @@ public sealed class RhiGhAIService : IAsyncDisposable
         // Read here, on the Rhino UI thread, so the binding itself can run off it.
         uint documentSerial = document.RuntimeSerialNumber;
         string documentPath = document.Path;
+        if (!await _providerGate.WaitAsync(0)) { throw new InvalidOperationException("Идёт подключение провайдера; дождитесь его завершения."); }
         _activeTurnCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(Settings.TimeoutSeconds));
         CancellationToken cancellationToken = _activeTurnCancellation.Token;
         RaiseBusyChanged(true);
@@ -209,10 +232,12 @@ public sealed class RhiGhAIService : IAsyncDisposable
 
             RhinoContextSnapshot snapshot = await OnRhinoUiAsync(() => RhinoSnapshotBuilder.Capture(document), cancellationToken).ConfigureAwait(false);
             GhComponentCatalog? catalog = null;
+            GH_Document? ghDocument = null;
             if (host == TargetHost.Grasshopper)
             {
                 OnMessage(new ServiceMessage("progress", "Открываю Grasshopper и читаю каталог компонентов…"));
                 catalog = await OnRhinoUiAsync(GrasshopperBridge.LoadCatalog, cancellationToken).ConfigureAwait(false);
+                ghDocument = await OnRhinoUiAsync(GrasshopperBridge.CaptureDocument, cancellationToken).ConfigureAwait(false);
             }
 
             string prompt = host == TargetHost.Grasshopper
@@ -230,7 +255,7 @@ public sealed class RhiGhAIService : IAsyncDisposable
                 {
                     if (host == TargetHost.Grasshopper)
                     {
-                        await RunGrasshopperTurnAsync(prompt, model, effort, catalog!, cancellationToken).ConfigureAwait(false);
+                        await RunGrasshopperTurnAsync(document, snapshot, ghDocument!, prompt, model, effort, catalog!, cancellationToken).ConfigureAwait(false);
                     }
                     else
                     {
@@ -272,6 +297,7 @@ public sealed class RhiGhAIService : IAsyncDisposable
             _activeTurnCancellation.Dispose();
             _activeTurnCancellation = null;
             RaiseBusyChanged(false);
+            _providerGate.Release();
         }
     }
 
@@ -320,6 +346,7 @@ public sealed class RhiGhAIService : IAsyncDisposable
     }
 
     private async Task RunGrasshopperTurnAsync(
+        RhinoDoc document, RhinoContextSnapshot snapshot, GH_Document ghDocument,
         string prompt,
         string model,
         string effort,
@@ -335,7 +362,11 @@ public sealed class RhiGhAIService : IAsyncDisposable
         GhGraphPlan plan = GhGraphCompiler.Compile(envelope, catalog);
         OnMessage(new ServiceMessage("code", "Определение проверено по каталогу этой установки Grasshopper:", GhGraphCompiler.Render(plan)));
         GhEmitResult result = await OnRhinoUiAsync(
-            () => GrasshopperBridge.Emit(_conversationId.ToString("D"), plan),
+            () =>
+            {
+                RhinoSnapshotBuilder.EnsureFresh(document, snapshot);
+                return GrasshopperBridge.Emit(_conversationId.ToString("D"), plan, ghDocument, cancellationToken);
+            },
             cancellationToken).ConfigureAwait(false);
         OnMessage(new ServiceMessage(
             "result",
@@ -491,7 +522,7 @@ public sealed class RhiGhAIService : IAsyncDisposable
         {
             JsonException or TaskPlanValidationException => true,
             RhinoExecutionException execution => execution.Code is not ("RollbackFailed" or "StaleDocument" or "StaleSelection" or "UndoUnavailable" or "UndoCloseFailed"),
-            GrasshopperExecutionException execution => execution.Code != "GrasshopperRollbackFailed",
+            GrasshopperExecutionException execution => execution.Code is not ("GrasshopperRollbackFailed" or "StaleGrasshopperDocument" or "GrasshopperUndoUnavailable"),
             _ => false
         };
     }
@@ -511,28 +542,21 @@ public sealed class RhiGhAIService : IAsyncDisposable
     private static async Task<T> OnRhinoUiAsync<T>(Func<T> action, CancellationToken cancellationToken)
     {
         TaskCompletionSource<T> source = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int phase = 0; // 0 queued, 1 executing, 2 cancelled before execution
+        using CancellationTokenRegistration registration = cancellationToken.Register(() =>
+        {
+            if (Interlocked.CompareExchange(ref phase, 2, 0) == 0) { source.TrySetCanceled(cancellationToken); }
+        });
         RhinoApp.InvokeOnUiThread(() =>
         {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                source.TrySetCanceled(cancellationToken);
-                return;
-            }
-
-            try
-            {
-                source.TrySetResult(action());
-            }
-            catch (Exception exception)
-            {
-                source.TrySetException(exception);
-            }
+            if (Interlocked.CompareExchange(ref phase, 1, 0) != 0) { return; }
+            try { cancellationToken.ThrowIfCancellationRequested(); source.TrySetResult(action()); }
+            catch (OperationCanceledException) { source.TrySetCanceled(cancellationToken); }
+            catch (Exception exception) { source.TrySetException(exception); }
         });
-
-        // The token has to be honoured on the wait as well. A modal dialog, a long solution or a
-        // closing Rhino can mean the delegate never runs, and the turn then hung on this await with
-        // no timeout and no Stop reaching it: the panel stayed busy until Rhino was restarted.
-        return await source.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Once a transaction begins, wait for its commit/rollback. Stop must not release the provider
+        // lease while Rhino/GH is still executing native code and could make a late mutation.
+        return await source.Task.ConfigureAwait(false);
     }
 
     private void SetConnection(ConnectionSnapshot connection)
@@ -595,9 +619,11 @@ public sealed class RhiGhAIService : IAsyncDisposable
     private ServiceMessage Redact(ServiceMessage message)
     {
         string? key = _secrets.LoadApiKey();
-        return key is { Length: >= 8 } && message.Text.Contains(key, StringComparison.Ordinal)
-            ? message with { Text = message.Text.Replace(key, "***", StringComparison.Ordinal) }
-            : message;
+        return string.IsNullOrEmpty(key) ? message : message with
+        {
+            Text = message.Text.Replace(key, "***", StringComparison.Ordinal),
+            Code = message.Code?.Replace(key, "***", StringComparison.Ordinal)
+        };
     }
 
     private void QueueTranscript(EventEnvelope envelope)
@@ -637,6 +663,8 @@ public sealed class RhiGhAIService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Shutdown();
-        await _provider.DisposeAsync().ConfigureAwait(false);
+        await _providerGate.WaitAsync().ConfigureAwait(false);
+        try { await _provider.DisposeAsync().ConfigureAwait(false); }
+        finally { _providerGate.Release(); }
     }
 }

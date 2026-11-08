@@ -61,7 +61,7 @@ public sealed class RhiGhAIPlugIn : PlugIn
     {
         if (!OperatingSystem.IsWindows() || RhinoApp.Version.Major != 8 || RhinoApp.Version.Minor < 20)
         {
-            errorMessage = "RhiGhAI 0.1.5 requires Rhino 8.20 or newer on Windows.";
+            errorMessage = "RhiGhAI requires Rhino 8.20 or newer on Windows.";
             return LoadReturnCode.ErrorNoDialog;
         }
 

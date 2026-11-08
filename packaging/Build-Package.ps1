@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [switch]$OfflineAudit,
+    [string]$CodexSourcePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,7 +11,7 @@ $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts'))
 $stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot 'package-input'))
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $stagingRoot 'RhiGhAI'))
-$installerRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot 'RhiGhAI-0.2.0-local-installer'))
+$installerRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot 'RhiGhAI-0.2.2-local-installer'))
 $installerPayload = Join-Path $installerRoot 'Payload\RhiGhAI'
 
 foreach ($validatedPath in @($stagingRoot, $packageRoot, $installerRoot)) {
@@ -30,7 +32,10 @@ function Invoke-DotNet {
     }
 }
 
-Invoke-DotNet restore (Join-Path $projectRoot 'RhiGhAI.sln') --locked-mode
+if ($OfflineAudit) {
+    Write-Warning 'NuGet vulnerability audit was not run: offline mode requested.'
+    Invoke-DotNet restore (Join-Path $projectRoot 'RhiGhAI.sln') --locked-mode /p:NuGetAudit=false
+} else { Invoke-DotNet restore (Join-Path $projectRoot 'RhiGhAI.sln') --locked-mode }
 Invoke-DotNet test (Join-Path $projectRoot 'tests\RhiGhAI.Tests\RhiGhAI.Tests.csproj') -c $Configuration --no-restore
 Invoke-DotNet build (Join-Path $projectRoot 'RhiGhAI.sln') -c $Configuration --no-restore
 
@@ -57,7 +62,8 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'NOTICE.txt') -Destination $pack
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $packageRoot 'README.md')
 
 # Codex Desktop is not added to PATH, so fall back to its per-user content-addressed bin folder.
-$codexSource = (Get-Command codex.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+$codexSource = $CodexSourcePath
+if ([string]::IsNullOrEmpty($codexSource)) { $codexSource = (Get-Command codex.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
 if ([string]::IsNullOrEmpty($codexSource) -or -not (Test-Path -LiteralPath $codexSource)) {
     $codexSource = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin') -Filter codex.exe -Recurse -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTimeUtc -Descending |
@@ -80,12 +86,11 @@ if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notm
     throw 'The discovered Codex runtime is not validly signed by OpenAI OpCo, LLC.'
 }
 
-$yakZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.0-rh8-win-yak.zip'
-$yakPath = Join-Path $artifactsRoot 'RhiGhAI-0.2.0-rh8-win.yak'
-$installerZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.0-local-installer.zip'
-$obsoleteRhiPath = Join-Path $artifactsRoot 'RhiGhAI-0.1.0-rh8-win.rhi'
+$yakZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.2-rh8-win-yak.zip'
+$yakPath = Join-Path $artifactsRoot 'RhiGhAI-0.2.2-rh8-win.yak'
+$installerZip = Join-Path $artifactsRoot 'RhiGhAI-0.2.2-local-installer.zip'
 
-foreach ($path in @($yakZip, $yakPath, $installerZip, $obsoleteRhiPath)) {
+foreach ($path in @($yakZip, $yakPath, $installerZip)) {
     if (Test-Path -LiteralPath $path) {
         Remove-Item -LiteralPath $path -Force
     }
@@ -101,9 +106,10 @@ if (Test-Path -LiteralPath $installerRoot) {
 New-Item -ItemType Directory -Path $installerPayload -Force | Out-Null
 Get-ChildItem -LiteralPath $packageRoot -Force | Copy-Item -Destination $installerPayload -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install RhiGhAI.cmd') -Destination $installerRoot
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-RhiGhAI.ps1') -Destination $installerRoot
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README-FIRST.txt') -Destination $installerRoot
 
-$checksumPaths = @($files | ForEach-Object { Join-Path $installerPayload $_ }) + (Join-Path $installerPayload 'Runtime\codex.exe')
+$checksumPaths = @(Get-ChildItem -LiteralPath $installerPayload -File -Recurse | Select-Object -ExpandProperty FullName)
 $checksums = Get-FileHash -Algorithm SHA256 -LiteralPath $checksumPaths
 # GetRelativePath does not exist in Windows PowerShell 5.1, which silently produced an empty SHA256SUMS.txt.
 $payloadPrefix = $installerPayload.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar

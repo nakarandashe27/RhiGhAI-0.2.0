@@ -20,7 +20,8 @@ public sealed record RhinoContextSnapshot(
     double AbsoluteTolerance,
     double AngleToleranceRadians,
     IReadOnlyList<string> Layers,
-    IReadOnlyList<SelectedObjectSnapshot> Selection)
+    IReadOnlyList<SelectedObjectSnapshot> Selection,
+    string DocumentPath = "")
 {
     public IReadOnlySet<string> AllowedReferences => Selection.Select(item => item.ReferenceId).ToHashSet(StringComparer.Ordinal);
 }

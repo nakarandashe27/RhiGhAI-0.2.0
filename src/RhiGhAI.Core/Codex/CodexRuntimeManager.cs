@@ -1,4 +1,7 @@
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace RhiGhAI.Core.Codex;
 
@@ -6,12 +9,24 @@ namespace RhiGhAI.Core.Codex;
 /// Locates an official Codex CLI runtime and copies it out of protected install locations
 /// (notably WindowsApps) before Rhino starts it. No network access is performed here.
 /// </summary>
-public sealed class CodexRuntimeManager
+public sealed class CodexRuntimeManager : IDisposable
 {
     private readonly IReadOnlyList<string>? _candidateOverride;
+    private readonly Action<string> _verify;
+    private readonly Func<string, CancellationToken, Task<string>> _readVersion;
+    private readonly SemaphoreSlim _preparationGate = new(1, 1);
+
 
     public CodexRuntimeManager(string? rootDirectory = null, IEnumerable<string>? candidateOverride = null)
+        : this(rootDirectory, candidateOverride,
+            path => PublisherVerifier.Verify(path, CodexRuntimeManifest.PublisherOrganization), ReadVersionAsync)
+    { }
+
+    internal CodexRuntimeManager(string? rootDirectory, IEnumerable<string>? candidateOverride,
+        Action<string> verify, Func<string, CancellationToken, Task<string>> readVersion)
     {
+        _verify = verify;
+        _readVersion = readVersion;
         RootDirectory = rootDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             ProductInfo.Name,
@@ -35,7 +50,7 @@ public sealed class CodexRuntimeManager
 
         try
         {
-            PublisherVerifier.Verify(ExecutablePath, CodexRuntimeManifest.PublisherOrganization);
+            _verify(ExecutablePath);
             return new RuntimeStatus(RuntimeState.Ready, "Официальный Codex runtime готов. Авторизация общая с Codex Desktop/CLI.", ExecutablePath);
         }
         catch (Exception exception) when (exception is InvalidDataException or Win32Exception or IOException or UnauthorizedAccessException)
@@ -44,65 +59,130 @@ public sealed class CodexRuntimeManager
         }
     }
 
-    public async Task<RuntimeStatus> PrepareAsync(IProgress<double>? progress, CancellationToken cancellationToken)
+    public Task<RuntimeStatus> PrepareAsync(IProgress<double>? progress, CancellationToken cancellationToken) =>
+        Task.Run(async () =>
+        {
+            await _preparationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try { return await PrepareCoreAsync(progress, cancellationToken).ConfigureAwait(false); }
+            finally { _preparationGate.Release(); }
+        }, cancellationToken);
+
+    private async Task<RuntimeStatus> PrepareCoreAsync(IProgress<double>? progress, CancellationToken cancellationToken)
     {
         RuntimeStatus existing = Inspect();
-        if (existing.State == RuntimeState.Ready)
+        string? source = existing.State == RuntimeState.Ready ? ExecutablePath : null;
+        string? bestVersion = source is null ? null : await _readVersion(source, cancellationToken).ConfigureAwait(false);
+        foreach (string candidate in EnumerateCandidates().Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            progress?.Report(1);
-            return existing;
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (!File.Exists(candidate) || string.Equals(Path.GetFullPath(candidate), ExecutablePath, StringComparison.OrdinalIgnoreCase)) { continue; }
+                _verify(candidate);
+                string version = await _readVersion(candidate, cancellationToken).ConfigureAwait(false);
+                if (bestVersion is null || CompareVersions(version, bestVersion) > 0)
+                {
+                    source = Path.GetFullPath(candidate);
+                    bestVersion = version;
+                }
+            }
+            catch (Exception exception) when (exception is InvalidDataException or Win32Exception or IOException or UnauthorizedAccessException or TimeoutException)
+            { /* Stale shims or inaccessible candidates do not invalidate the last working copy. */ }
         }
-
-        string? source = FindCandidate();
         if (source is null)
         {
-            return new RuntimeStatus(
-                RuntimeState.Missing,
-                "Codex не найден. Установите официальный Codex Desktop/CLI либо используйте полный установщик RhiGhAI с включённым runtime.",
-                null);
+            return new RuntimeStatus(RuntimeState.Missing, "Codex не найден. Установите официальный Codex Desktop/CLI или полный пакет RhiGhAI.", null);
         }
-
-        PublisherVerifier.Verify(source, CodexRuntimeManifest.PublisherOrganization);
+        if (source == ExecutablePath)
+        {
+            progress?.Report(1);
+            return existing with { Message = $"Codex {bestVersion}. Авторизация общая с Codex Desktop/CLI." };
+        }
         Directory.CreateDirectory(RuntimeDirectory);
         string stagingPath = Path.Combine(RuntimeDirectory, $".codex-{Guid.NewGuid():N}.tmp");
         try
         {
             await CopyAsync(source, stagingPath, progress, cancellationToken).ConfigureAwait(false);
-            PublisherVerifier.Verify(stagingPath, CodexRuntimeManifest.PublisherOrganization);
-            File.Move(stagingPath, ExecutablePath, true);
+            _verify(stagingPath);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(ExecutablePath))
+            {
+                File.Replace(stagingPath, ExecutablePath, Path.Combine(RuntimeDirectory, "codex.previous.exe"), true);
+            }
+            else { File.Move(stagingPath, ExecutablePath); }
             Directory.CreateDirectory(EmptyWorkingDirectory);
-            return Inspect();
+            return Inspect() with { Message = $"Codex {bestVersion}. Runtime обновлён из подписанной установки." };
+        }
+        catch (Exception exception) when (existing.State == RuntimeState.Ready && exception is IOException or UnauthorizedAccessException or Win32Exception or InvalidDataException)
+        {
+            return existing with { Message = "Не удалось обновить Codex; сохранён предыдущий подписанный runtime." };
         }
         finally
         {
-            if (File.Exists(stagingPath))
-            {
-                File.Delete(stagingPath);
-            }
+            if (File.Exists(stagingPath)) { File.Delete(stagingPath); }
         }
     }
 
-    private string? FindCandidate()
+    public Task<bool> RestorePreviousAsync(CancellationToken cancellationToken) => Task.Run(async () =>
     {
-        foreach (string candidate in EnumerateCandidates().Distinct(StringComparer.OrdinalIgnoreCase))
+        await _preparationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            try
-            {
-                if (!File.Exists(candidate) || string.Equals(candidate, ExecutablePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                PublisherVerifier.Verify(candidate, CodexRuntimeManifest.PublisherOrganization);
-                return Path.GetFullPath(candidate);
-            }
-            catch (Exception exception) when (exception is InvalidDataException or Win32Exception or IOException or UnauthorizedAccessException)
-            {
-                // Ignore stale command shims and unsigned files; only a verified OpenAI runtime is accepted.
-            }
+            string backup = Path.Combine(RuntimeDirectory, "codex.previous.exe");
+            if (!File.Exists(backup)) { return false; }
+            _verify(backup);
+            File.Replace(backup, ExecutablePath, Path.Combine(RuntimeDirectory, $"codex.rejected-{Guid.NewGuid():N}.exe"), true);
+            return true;
         }
+        finally { _preparationGate.Release(); }
+    }, cancellationToken);
 
-        return null;
+    internal static int CompareVersions(string left, string right)
+    {
+        static int[] Parts(string version)
+        {
+            Match match = Regex.Match(version, @"^(\d+)\.(\d+)\.(\d+)(?:-alpha\.(\d+)(?:\.(\d+))?)?$", RegexOptions.CultureInvariant);
+            if (!match.Success) { throw new InvalidDataException("Неподдерживаемая версия Codex runtime."); }
+            return [int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture),
+                int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture), int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture),
+                match.Groups[4].Success ? int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture) : int.MaxValue,
+                match.Groups[5].Success ? int.Parse(match.Groups[5].Value, CultureInfo.InvariantCulture) : 0];
+        }
+        int[] a = Parts(left); int[] b = Parts(right);
+        for (int index = 0; index < a.Length; index++)
+        {
+            int comparison = a[index].CompareTo(b[index]);
+            if (comparison != 0) { return comparison; }
+        }
+        return 0;
+    }
+
+    private static async Task<string> ReadVersionAsync(string path, CancellationToken cancellationToken)
+    {
+        using Process process = Process.Start(new ProcessStartInfo(path, "--version")
+        {
+            UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true
+        }) ?? throw new IOException("Не удалось проверить версию Codex.");
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            Task<string> output = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            Task<string> error = process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            await error.ConfigureAwait(false);
+            string text = (await output.ConfigureAwait(false)).Trim();
+            if (process.ExitCode != 0 || !text.StartsWith("codex-cli ", StringComparison.Ordinal)) { throw new InvalidDataException("Runtime не вернул версию Codex."); }
+            string version = text["codex-cli ".Length..];
+            _ = CompareVersions(version, version);
+            return version;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        { throw new TimeoutException("Проверка версии Codex превысила 5 секунд."); }
+        finally
+        {
+            if (!process.HasExited) { process.Kill(true); }
+        }
     }
 
     private IEnumerable<string> EnumerateCandidates()
@@ -177,6 +257,8 @@ public sealed class CodexRuntimeManager
             yield return Path.Combine(package, "app", "resources", "codex.exe");
         }
     }
+
+    public void Dispose() => _preparationGate.Dispose();
 
     private static async Task CopyAsync(string sourcePath, string destinationPath, IProgress<double>? progress, CancellationToken cancellationToken)
     {

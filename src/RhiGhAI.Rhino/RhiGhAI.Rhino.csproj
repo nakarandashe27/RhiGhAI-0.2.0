@@ -6,6 +6,7 @@
     <RootNamespace>RhiGhAI.Rhino</RootNamespace>
     <TargetExt>.rhp</TargetExt>
     <EnableDynamicLoading>true</EnableDynamicLoading>
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RhiGhAI.Core\RhiGhAI.Core.csproj" />

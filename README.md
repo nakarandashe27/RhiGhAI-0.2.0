@@ -6,7 +6,7 @@
 ![Rhino 8](https://img.shields.io/badge/Rhino-8.20%2B-801010)
 ![.NET 8](https://img.shields.io/badge/.NET-8.0--windows-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
-![Status](https://img.shields.io/badge/status-MVP%200.2.0-orange)
+![Status](https://img.shields.io/badge/status-MVP%200.2.2-orange)
 
 RhiGhAI is an open-source plugin for Rhino 8. You describe a task in plain language; a language model returns a **strictly typed plan**, never code; and a deterministic executor performs only allowlisted operations.
 
@@ -44,6 +44,9 @@ Threat model and trust boundary: [`context/architecture/07-нефункцион�
 
 ## Install
 
+For the prepared local release, extract `artifacts/RhiGhAI-0.2.2-local-installer.zip` and run **Install RhiGhAI.cmd** with Rhino closed. The ZIP includes the official signed Codex runtime; users of this package need neither an SDK nor a separate Codex installation. Source-building routes are below.
+
+
 No prebuilt binaries are committed to this repository, so every route starts by building. Three routes, in order of how much you want to do yourself:
 
 | Route | Use it when | Needs Codex installed? |
@@ -65,11 +68,11 @@ No prebuilt binaries are committed to this repository, so every route starts by 
 Restores pinned NuGet dependencies, runs the tests, and writes a local installer ZIP plus a `.yak` into `artifacts\`. Then:
 
 1. Close Rhino.
-2. Unpack `artifacts\RhiGhAI-0.2.0-local-installer.zip` **completely** — running the `.cmd` from inside the ZIP viewer will fail.
+2. Unpack `artifacts\RhiGhAI-0.2.2-local-installer.zip` **completely** — running the `.cmd` from inside the ZIP viewer will fail.
 3. Run `Install RhiGhAI.cmd`.
 4. Start Rhino 8 and type `RhiGhAI` in the command line.
 
-The installer waits for Rhino to exit, removes stale versioned folders from older builds, copies into one unversioned path, and registers the plugin. The panel header shows the build actually loaded — check there that an update applied.
+The installer requires Rhino to be closed, preserves the previous installation in a backup directory, copies into one unversioned path, and registers the plugin. The panel header shows the build actually loaded — check there that an update applied.
 
 ### Route B — manual install, no Codex required
 
@@ -151,7 +154,7 @@ Do exactly this, and stop and tell me if any step fails:
    Touch no other registry location, and no other Rhino plugin.
 
 5. Tell me to start Rhino 8 and run the command: RhiGhAI
-   The panel header must read v0.2.0.
+   The panel header must read v0.2.2.
 
 Constraints: do not require administrator rights, do not disable Windows
 Defender or SmartScreen, do not download a Codex runtime, and do not enter
@@ -187,7 +190,7 @@ Structured output is requested as strict `json_schema`; providers without a stri
 
 **Both:** up to five bounded self-repair attempts leaving no geometry behind, stop/timeout, conversation continuation, and a readable listing of the checked plan in the message feed.
 
-Mesh, SubD, materials, rendering, layouts and blocks are deliberately out of scope for 0.2.0.
+Mesh, SubD, materials, rendering, layouts and blocks are deliberately out of scope for 0.2.2.
 
 ## Try it
 
@@ -228,7 +231,7 @@ Settings, the encrypted provider key, local conversation bindings and the workin
 
 ## Status and honesty
 
-0.2.0 is an MVP. It is not code-signed and not published to Yak. It has been exercised on a live Rhino 8 installation, but it has not been through a broad clean-machine matrix — treat it as early software and keep backups of work you care about.
+0.2.2 is an MVP. It is not code-signed and not published to Yak. It has been exercised on a live Rhino 8 installation, but it has not been through a broad clean-machine matrix — treat it as early software and keep backups of work you care about.
 
 RhiGhAI is not an engineering tool: it can produce a geometrically valid result that is nonetheless wrong for your purpose. You remain the architect.
 
@@ -269,6 +272,9 @@ Windows x64 · Rhino 8.20+ · .NET 8 SDK для сборки · аккаунт �
 
 ## Установка
 
+Для подготовленной локальной версии распакуйте `artifacts/RhiGhAI-0.2.2-local-installer.zip` и запустите **Install RhiGhAI.cmd**, предварительно закрыв Rhino. В ZIP включён официальный подписанный Codex runtime; SDK и отдельная установка Codex для пользователя этого пакета не нужны. Ниже описана сборка из исходников.
+
+
 Готовые сборки в репозитории не хранятся, поэтому любой путь начинается со сборки. Три пути — по мере того, сколько вы хотите делать руками:
 
 | Путь | Когда | Нужен ли установленный Codex? |
@@ -290,11 +296,11 @@ Windows x64 · Rhino 8.20+ · .NET 8 SDK для сборки · аккаунт �
 Скрипт восстанавливает закреплённые NuGet-зависимости, запускает тесты и создаёт локальный installer ZIP и `.yak` в `artifacts\`. Затем:
 
 1. Закройте Rhino.
-2. Распакуйте `artifacts\RhiGhAI-0.2.0-local-installer.zip` **целиком** — запуск `.cmd` прямо из окна просмотра архива не сработает.
+2. Распакуйте `artifacts\RhiGhAI-0.2.2-local-installer.zip` **целиком** — запуск `.cmd` прямо из окна просмотра архива не сработает.
 3. Запустите `Install RhiGhAI.cmd`.
 4. Откройте Rhino 8 и выполните команду `RhiGhAI`.
 
-Установщик дожидается выхода из Rhino, удаляет папки прошлых версий, копирует файлы в один неверсионированный путь и регистрирует плагин. Номер фактически загруженной сборки показан в шапке панели.
+Установщик требует закрыть Rhino, проверяет подпись и контрольные суммы, сохраняет предыдущую установку целиком в резервную папку, затем активирует файлы в одном неверсионированном пути и регистрирует плагин. Номер фактически загруженной сборки показан в шапке панели.
 
 ### Путь B — вручную, Codex не нужен
 
@@ -377,7 +383,7 @@ Remove-ItemProperty -Path $key -Name FileName -ErrorAction SilentlyContinue
    Больше никакие ветки реестра и никакие другие плагины Rhino не трогай.
 
 5. Скажи мне запустить Rhino 8 и выполнить команду: RhiGhAI
-   В шапке панели должно быть v0.2.0.
+   В шапке панели должно быть v0.2.2.
 
 Ограничения: не требуй прав администратора, не отключай Windows Defender и
 SmartScreen, не скачивай Codex runtime и не вписывай за меня API-ключ —
@@ -413,7 +419,7 @@ Structured output запрашивается строгой `json_schema`; пр�
 
 **Общее:** до пяти попыток самоисправления без остаточной геометрии, остановка и тайм-аут, продолжение диалога, читаемый листинг проверенного плана в ленте.
 
-Mesh, SubD, материалы, рендеринг, листы и блоки в 0.2.0 намеренно не входят.
+Mesh, SubD, материалы, рендеринг, листы и блоки в 0.2.2 намеренно не входят.
 
 ## Быстрая проверка
 
@@ -452,10 +458,14 @@ Issues и pull requests приветствуются. Пожалуйста, де
 
 ## Статус
 
-0.2.0 — MVP. Сборка не подписана и не опубликована в Yak. Она проверена на живой установке Rhino 8, но не проходила широкую clean-machine матрицу: относитесь к ней как к раннему софту и держите резервные копии важной работы.
+0.2.2 — MVP. Сборка не подписана и не опубликована в Yak. Она проверена на живой установке Rhino 8, но не проходила широкую clean-machine матрицу: относитесь к ней как к раннему софту и держите резервные копии важной работы.
 
 RhiGhAI не расчётный инструмент: он может выдать геометрически корректный результат, который неверен по существу задачи. Архитектор — по-прежнему вы.
 
 ## Лицензия
 
 [MIT](LICENSE) © 2026 nakarandashe27.
+
+## Проверки 0.2.2 / 0.2.2 verification
+
+[CODE_REVIEW.md](CODE_REVIEW.md) описывает подтверждённые дефекты и исправления; [TEST_REPORT.md](TEST_REPORT.md) — фактически выполненные проверки и оставшиеся ограничения. Каталог моделей и усилий загружается из Codex, а не хранится в коде. Реальные запросы через текущую ChatGPT-подписку подтвердили `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`, `gpt-6-sol`; доступность у других аккаунтов определяется их runtime и подпиской.

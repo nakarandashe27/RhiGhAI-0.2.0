@@ -37,6 +37,10 @@ public sealed class RhiGhAIPanel : Panel
     private readonly DropDown _model = new();
     private readonly DropDown _effort = new();
     private bool _syncingSource;
+    private bool _applyingConnection;
+    private string? _preferredEffort;
+    private bool _viewActive = true;
+    private bool _subscribed;
     private bool _announcedProviderSetup;
     private readonly RhiGhAIButton _send;
     private readonly RhiGhAIButton _newChat;
@@ -61,20 +65,15 @@ public sealed class RhiGhAIPanel : Panel
             ExpandContentWidth = true
         };
         _brandSubtitle = RhiGhAIStyles.MachineLabel($"Rhino × Grasshopper · v{ProductInfo.Version}", RhiGhAIStyles.Lime);
-        _send = RhiGhAIStyles.Button("ОТПРАВИТЬ", BrandButtonKind.Pink, 132);
-        _newChat = RhiGhAIStyles.Button("＋ ЗАНОВО", BrandButtonKind.Ghost, 104);
-        _settings = RhiGhAIStyles.Button("НАСТРОЙКИ", BrandButtonKind.Ghost, 112);
+        _send = RhiGhAIStyles.Button("Отправить", BrandButtonKind.Pink, 132);
+        _newChat = RhiGhAIStyles.Button("Начать заново", BrandButtonKind.Ghost, 132);
+        _settings = RhiGhAIStyles.Button("Настройки", BrandButtonKind.Ghost, 112);
         Content = BuildShell();
 
-        _service.Message += ServiceOnMessage;
-        _service.ConnectionChanged += ServiceOnConnectionChanged;
-        _service.BusyChanged += ServiceOnBusyChanged;
-        RhinoDoc.SelectObjects += SelectionChanged;
-        RhinoDoc.DeselectObjects += SelectionChanged;
-        RhinoDoc.DeselectAllObjects += SelectionCleared;
-        RhinoDoc.ActiveDocumentChanged += ActiveDocumentChanged;
+        Subscribe();
 
-        SetAgentState("готов к задаче", RhiGhAIStyles.Lime);
+
+        SetAgentState("готов к задаче", RhiGhAIStyles.Muted);
         UpdateSelection();
         ApplyConnection(_connection);
         _ = RestoreTranscriptSafeAsync(RhinoDoc.ActiveDoc?.Path);
@@ -99,8 +98,8 @@ public sealed class RhiGhAIPanel : Panel
 
         _compact = compact;
         _brandSubtitle.Visible = !compact;
-        SetButton(_newChat, compact ? "＋" : "＋ ЗАНОВО", compact ? 38 : 104);
-        SetButton(_settings, compact ? "⚙" : "НАСТРОЙКИ", compact ? 38 : 112);
+        SetButton(_newChat, compact ? "＋" : "Начать заново", compact ? 38 : 132);
+        SetButton(_settings, compact ? "⚙" : "Настройки", compact ? 38 : 112);
         UpdateFooter();
         UpdateSelection();
     }
@@ -116,7 +115,7 @@ public sealed class RhiGhAIPanel : Panel
             }
 
             _messages.Items.Clear();
-            _service.StartNewConversation(RhinoDoc.ActiveDoc);
+            _ = StartNewConversationSafeAsync();
         };
         _settings.Click += (_, _) => ShowSettings();
 
@@ -127,7 +126,7 @@ public sealed class RhiGhAIPanel : Panel
             VerticalContentAlignment = VerticalAlignment.Center,
             Items =
             {
-                new Label { Text = "RHIGH", Font = RhiGhAIStyles.Display(15), TextColor = RhiGhAIStyles.White },
+                new Label { Text = "RhiGh", Font = RhiGhAIStyles.Display(15), TextColor = RhiGhAIStyles.White },
                 new Label { Text = "AI", Font = RhiGhAIStyles.Display(15), TextColor = RhiGhAIStyles.Orange }
             }
         };
@@ -148,10 +147,10 @@ public sealed class RhiGhAIPanel : Panel
             }
         };
 
-        _selection.Font = RhiGhAIStyles.Mono(8.5f);
+        _selection.Font = RhiGhAIStyles.Ui(8.5f);
         _selection.TextColor = RhiGhAIStyles.Muted;
         _selection.VerticalAlignment = VerticalAlignment.Center;
-        _agentState.Font = RhiGhAIStyles.Mono(8.5f);
+        _agentState.Font = RhiGhAIStyles.Ui(8.5f);
         _agentState.TextColor = RhiGhAIStyles.Muted;
         _agentState.VerticalAlignment = VerticalAlignment.Center;
         _agentState.TextAlignment = TextAlignment.Right;
@@ -168,7 +167,7 @@ public sealed class RhiGhAIPanel : Panel
 
         _footer.BackgroundColor = RhiGhAIStyles.Dark;
         _footer.TextColor = Color.FromArgb(205, 255, 255, 255);
-        _footer.Font = RhiGhAIStyles.Mono(8.5f);
+        _footer.Font = RhiGhAIStyles.Ui(8.5f);
         _footer.VerticalAlignment = VerticalAlignment.Center;
         Panel footerPanel = new() { BackgroundColor = RhiGhAIStyles.Dark, Padding = new Padding(14, 6), Content = _footer };
 
@@ -230,7 +229,12 @@ public sealed class RhiGhAIPanel : Panel
             dropDown.Height = 28;
         }
 
-        _model.SelectedIndexChanged += (_, _) => UpdateEfforts();
+        _model.SelectedIndexChanged += (_, _) =>
+        {
+            UpdateEfforts();
+            if (!_applyingConnection) { _ = PersistSelectionSafeAsync(); }
+        };
+        _effort.SelectedIndexChanged += (_, _) => { if (!_applyingConnection) { _preferredEffort = SelectedEffortId(); _ = PersistSelectionSafeAsync(); } };
         _send.Click += async (_, _) => await SendOrStopSafeAsync();
         _send.Height = 30;
 
@@ -258,8 +262,8 @@ public sealed class RhiGhAIPanel : Panel
                 new TableRow(
                     new TableCell(new Label
                     {
-                        Text = "ИСТОЧНИК",
-                        Font = RhiGhAIStyles.Mono(8.5f),
+                        Text = "Источник",
+                        Font = RhiGhAIStyles.Ui(8.5f),
                         TextColor = RhiGhAIStyles.Muted,
                         VerticalAlignment = VerticalAlignment.Center
                     }),
@@ -286,7 +290,7 @@ public sealed class RhiGhAIPanel : Panel
         {
             BackgroundColor = RhiGhAIStyles.Section,
             Padding = new Padding(12, 10),
-            Content = RhiGhAIStyles.Bordered(box, RhiGhAIStyles.Ink, RhiGhAIStyles.White, new Padding(10))
+            Content = RhiGhAIStyles.Bordered(box, RhiGhAIStyles.Line, RhiGhAIStyles.White, new Padding(10))
         };
     }
 
@@ -332,7 +336,7 @@ public sealed class RhiGhAIPanel : Panel
         }
         catch (Exception exception)
         {
-            Application.Instance.AsyncInvoke(() =>
+            Dispatch(() =>
             {
                 // The save may have been refused outright (a turn is running), so the dropdown is put
                 // back in step with the provider that is actually in use.
@@ -401,7 +405,7 @@ public sealed class RhiGhAIPanel : Panel
             restored = Array.Empty<ServiceMessage>();
         }
 
-        Application.Instance.AsyncInvoke(() =>
+        Dispatch(() =>
         {
             if (restored.Count == 0)
             {
@@ -425,17 +429,19 @@ public sealed class RhiGhAIPanel : Panel
         }
         catch (Exception exception)
         {
-            Application.Instance.AsyncInvoke(() =>
+            Dispatch(() =>
                 AddMessage(new ServiceMessage("error", $"Подключение: {exception.Message}", "ConnectionFailed")));
         }
     }
 
-    private void ServiceOnMessage(object? sender, ServiceMessage message) => Application.Instance.AsyncInvoke(() => AddMessage(message));
-    private void ServiceOnConnectionChanged(object? sender, ConnectionSnapshot connection) => Application.Instance.AsyncInvoke(() => ApplyConnection(connection));
-    private void ServiceOnBusyChanged(object? sender, bool busy) => Application.Instance.AsyncInvoke(() => SetBusy(busy));
+    private void ServiceOnMessage(object? sender, ServiceMessage message) => Dispatch(() => AddMessage(message));
+    private void ServiceOnConnectionChanged(object? sender, ConnectionSnapshot connection) => Dispatch(() => ApplyConnection(connection));
+    private void ServiceOnBusyChanged(object? sender, bool busy) => Dispatch(() => SetBusy(busy));
 
     private void ApplyConnection(ConnectionSnapshot connection)
     {
+        string? preferredModel = SelectedModelId() ?? _service.Settings.ModelId;
+        _applyingConnection = true;
         _connection = connection;
         _models = connection.Models;
         _model.Items.Clear();
@@ -444,14 +450,12 @@ public sealed class RhiGhAIPanel : Panel
             _model.Items.Add(model.DisplayName);
         }
 
-        int selected = _models.ToList().FindIndex(item => item.Id == _service.Settings.ModelId);
-        if (selected < 0)
-        {
-            selected = _models.ToList().FindIndex(item => item.IsDefault);
-        }
-
-        _model.SelectedIndex = selected >= 0 ? selected : (_models.Count > 0 ? 0 : -1);
+        _model.SelectedIndex = ProviderModelSelection.ModelIndex(_models, preferredModel);
         UpdateEfforts();
+        _applyingConnection = false;
+        _send.Enabled = _busy || (connection.Ready && SelectedModelId() is not null && SelectedEffortId() is not null);
+        if (preferredModel is not null && !_models.Any(item => item.Id == preferredModel) && _models.Count > 0)
+        { AddMessage(new ServiceMessage("system", "Сохранённая модель отсутствует в каталоге; выбрана доступная модель по умолчанию.")); }
         UpdateFooter();
         SyncSource(connection.Provider);
 
@@ -488,7 +492,7 @@ public sealed class RhiGhAIPanel : Panel
 
     private void UpdateFooter()
     {
-        string source = _connection.Provider == ProviderKind.Codex ? "CODEX" : "API";
+        string source = _connection.Provider == ProviderKind.Codex ? "Codex" : "API";
         List<string> parts = [$"{source} · {_connection.AccountText}"];
         if (_compact)
         {
@@ -498,20 +502,24 @@ public sealed class RhiGhAIPanel : Panel
 
         if (_connection.UsageText is { Length: > 0 } usage)
         {
-            parts.Add($"USAGE {usage}");
+            parts.Add($"Использовано {usage}");
         }
 
-        parts.Add($"MODELS {_connection.Models.Count}");
+        parts.Add($"Моделей {_connection.Models.Count}");
         parts.Add($"v{ProductInfo.Version}");
         _footer.Text = string.Join("   ·   ", parts);
     }
 
     private void UpdateEfforts()
     {
+        string? preferredEffort = _preferredEffort ?? _service.Settings.EffortId;
+        bool applying = _applyingConnection;
+        _applyingConnection = true;
         _effort.Items.Clear();
         if (_model.SelectedIndex < 0 || _model.SelectedIndex >= _models.Count)
         {
             _effort.SelectedIndex = -1;
+            _applyingConnection = applying;
             return;
         }
 
@@ -521,13 +529,8 @@ public sealed class RhiGhAIPanel : Panel
             _effort.Items.Add(effort);
         }
 
-        int selected = model.Efforts.ToList().FindIndex(item => item == _service.Settings.EffortId);
-        if (selected < 0)
-        {
-            selected = model.Efforts.ToList().FindIndex(item => item == model.DefaultEffort);
-        }
-
-        _effort.SelectedIndex = selected >= 0 ? selected : (model.Efforts.Count > 0 ? 0 : -1);
+        _effort.SelectedIndex = ProviderModelSelection.EffortIndex(model, preferredEffort);
+        _applyingConnection = applying;
     }
 
     private void AddMessage(ServiceMessage message)
@@ -543,7 +546,7 @@ public sealed class RhiGhAIPanel : Panel
         };
 
         _messages.Items.Add(new StackLayoutItem(card, HorizontalAlignment.Stretch));
-        Application.Instance.AsyncInvoke(() => _messageScroll.ScrollPosition = new Point(0, int.MaxValue));
+        Dispatch(() => _messageScroll.ScrollPosition = new Point(0, int.MaxValue));
     }
 
     private static Control UserCard(string text) => new Panel
@@ -556,7 +559,7 @@ public sealed class RhiGhAIPanel : Panel
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Items =
             {
-                RhiGhAIStyles.Micro("Вы", RhiGhAIStyles.Coral),
+                RhiGhAIStyles.Micro("Вы", RhiGhAIStyles.Blue),
                 new Label
                 {
                     Text = text,
@@ -589,7 +592,7 @@ public sealed class RhiGhAIPanel : Panel
             Items =
             {
                 new Label { Text = title, Font = RhiGhAIStyles.UiBold(10.5f), TextColor = RhiGhAIStyles.Ink },
-                new Label { Text = text, Wrap = WrapMode.Word, Font = RhiGhAIStyles.Ui(10), TextColor = RhiGhAIStyles.Muted }
+                new TextArea { Text = text, ReadOnly = true, Wrap = true, BackgroundColor = RhiGhAIStyles.White, Height = Math.Clamp(40 + text.Length / 3, 50, 160), Font = RhiGhAIStyles.Ui(10), TextColor = RhiGhAIStyles.Ink }
             }
         };
         // A bare cell stretches its content; the stack keeps the mark a 22 px square at the top.
@@ -606,7 +609,7 @@ public sealed class RhiGhAIPanel : Panel
     {
         string code = message.Code ?? string.Empty;
         int lines = code.Count(character => character == '\n') + 1;
-        RhiGhAIButton copy = RhiGhAIStyles.Button("КОПИРОВАТЬ", BrandButtonKind.Ghost, 110);
+        RhiGhAIButton copy = RhiGhAIStyles.Button("Копировать", BrandButtonKind.Ghost, 110);
         copy.Height = 26;
         copy.Click += (_, _) => Clipboard.Instance.Text = code;
 
@@ -657,9 +660,11 @@ public sealed class RhiGhAIPanel : Panel
     private void SetBusy(bool busy)
     {
         _busy = busy;
-        _send.Text = busy ? "ОСТАНОВИТЬ" : "ОТПРАВИТЬ";
+        _send.Enabled = busy || (_connection.Ready && SelectedModelId() is not null && SelectedEffortId() is not null);
+        _send.Text = busy ? "Остановить" : "Отправить";
+        _send.ToolTip = busy ? "Остановить задачу" : "Отправить задачу";
         _send.FillColor = busy ? RhiGhAIStyles.Red : RhiGhAIStyles.Pink;
-        _send.ForegroundColor = busy ? RhiGhAIStyles.White : RhiGhAIStyles.Ink;
+        _send.ForegroundColor = RhiGhAIStyles.White;
         _send.BorderColor = busy ? RhiGhAIStyles.Red : RhiGhAIStyles.Pink;
         _send.Invalidate();
         _model.Enabled = !busy;
@@ -672,7 +677,7 @@ public sealed class RhiGhAIPanel : Panel
 
     private void SetAgentState(string text, Color color)
     {
-        _agentState.Text = $"● {text}".ToUpperInvariant();
+        _agentState.Text = $"● {text}";
         _agentState.TextColor = color;
     }
 
@@ -684,12 +689,50 @@ public sealed class RhiGhAIPanel : Panel
         button.Invalidate();
     }
 
-    private void SelectionChanged(object? sender, RhinoObjectSelectionEventArgs args) => Application.Instance.AsyncInvoke(UpdateSelection);
-    private void SelectionCleared(object? sender, RhinoDeselectAllObjectsEventArgs args) => Application.Instance.AsyncInvoke(UpdateSelection);
-    private void ActiveDocumentChanged(object? sender, DocumentEventArgs args) => Application.Instance.AsyncInvoke(UpdateSelection);
+    private void SelectionChanged(object? sender, RhinoObjectSelectionEventArgs args) => Dispatch(UpdateSelection);
+    private void SelectionCleared(object? sender, RhinoDeselectAllObjectsEventArgs args) => Dispatch(UpdateSelection);
+    private void ActiveDocumentChanged(object? sender, DocumentEventArgs args) => Dispatch(UpdateSelection);
+
+    private void Dispatch(Action action) => Application.Instance.AsyncInvoke(() => { if (_viewActive) { action(); } });
+    private void Subscribe()
+    {
+        if (_subscribed) { return; }
+        _subscribed = true;
+        _service.Message += ServiceOnMessage;
+        _service.ConnectionChanged += ServiceOnConnectionChanged;
+        _service.BusyChanged += ServiceOnBusyChanged;
+        RhinoDoc.SelectObjects += SelectionChanged;
+        RhinoDoc.DeselectObjects += SelectionChanged;
+        RhinoDoc.DeselectAllObjects += SelectionCleared;
+        RhinoDoc.ActiveDocumentChanged += ActiveDocumentChanged;
+    }
+    protected override void OnLoad(EventArgs e)
+    {
+        _viewActive = true;
+        Subscribe();
+        base.OnLoad(e);
+    }
+    private async Task StartNewConversationSafeAsync()
+    {
+        RhinoDoc? document = RhinoDoc.ActiveDoc;
+        uint serial = document?.RuntimeSerialNumber ?? 0;
+        string path = document?.Path ?? string.Empty;
+        try { await _service.StartNewConversationAsync(serial, path).ConfigureAwait(false); }
+        catch (Exception exception) { Dispatch(() => AddMessage(new ServiceMessage("error", exception.Message))); }
+    }
+
+    private async Task PersistSelectionSafeAsync()
+    {
+        string? model = SelectedModelId(); string? effort = SelectedEffortId();
+        if (_busy || model is null || effort is null) { return; }
+        try { await _service.SaveSelectionAsync(model, effort).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException) { }
+    }
 
     protected override void OnUnLoad(EventArgs e)
     {
+        _viewActive = false;
+        _subscribed = false;
         _service.Message -= ServiceOnMessage;
         _service.ConnectionChanged -= ServiceOnConnectionChanged;
         _service.BusyChanged -= ServiceOnBusyChanged;
@@ -705,26 +748,26 @@ public sealed class RhiGhAIPanel : Panel
         RhinoDoc? document = RhinoDoc.ActiveDoc;
         if (document is null)
         {
-            _selection.Text = "ДОКУМЕНТ НЕ ОТКРЫТ";
+            _selection.Text = "Документ не открыт";
             return;
         }
 
         RhinoObject[] selected = document.Objects.GetSelectedObjects(false, false).ToArray();
         if (selected.Length == 0)
         {
-            _selection.Text = $"НИЧЕГО НЕ ВЫДЕЛЕНО · {document.ModelUnitSystem}".ToUpperInvariant();
+            _selection.Text = $"Ничего не выделено · {document.ModelUnitSystem}";
             return;
         }
 
-        string warning = selected.Length > 100 ? " · ЛИМИТ 100" : string.Empty;
+        string warning = selected.Length > 100 ? " · Лимит 100" : string.Empty;
         if (_compact)
         {
-            _selection.Text = $"ВЫДЕЛЕНО {selected.Length}{warning}";
+            _selection.Text = $"Выделено {selected.Length}{warning}";
             return;
         }
 
         string types = string.Join(", ", selected.GroupBy(item => item.ObjectType).Select(group => $"{group.Key} × {group.Count()}"));
-        _selection.Text = $"ВЫДЕЛЕНО {selected.Length} · {types} · {document.ModelUnitSystem}{warning}".ToUpperInvariant();
+        _selection.Text = $"Выделено {selected.Length} · {types} · {document.ModelUnitSystem}{warning}";
     }
 
     private string? SelectedModelId() => _model.SelectedIndex >= 0 && _model.SelectedIndex < _models.Count ? _models[_model.SelectedIndex].Id : null;

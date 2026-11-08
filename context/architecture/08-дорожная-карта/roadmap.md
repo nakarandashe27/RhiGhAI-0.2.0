@@ -8,6 +8,20 @@
 
 Решение поменялось — правится сам целевой файл. Значимое изменение стека, данных, границ или модулей дополнительно фиксируется ADR в [журнале решений](../06-решения/журнал-решений/). Мелкие уточнения вносятся прямо в документы.
 
+## Фактическое состояние на 2026-10-03 (0.2.2)
+
+Core, Rhino/GH executors, оба провайдера, local state, панель, settings и локальный ZIP/Yak уже реализованы. Чекбоксы ниже относятся к полным целевым критериям, включая ещё отсутствующие commit journal/crash recovery, исчерпывающие permutations и clean-machine/minimum-version matrix; начинать эти модули с нуля по первому `[ ]` нельзя.
+
+| Область | Реализовано / проверено | Осталось до полного критерия |
+|---|---|---|
+| Toolchain, контракты | Locked restore из кеша, Release build, unit tests, compat | Online vulnerability audit, minimum Rhino 8.20 |
+| Codex | Подписанный runtime update/LKG, динамические models/efforts, четыре реальные современные модели, продолжение/Stop; service timeout и error fixtures | First-login/logout на чистой машине (общая авторизация не сбрасывалась) |
+| Rhino atomicity | Один Undo, слои/transform mutation tracking, freshness по документу/Save As/New/Open | Полная fault/crash matrix и recovery journal |
+| Native GH | Канонический каталог, validator, native graph, замена/Undo, runtime-error rollback, владение в Undo/Redo; три live AI сценария, sliders/save/reopen | Matrix сторонних компонентов |
+| UI / установка | Native округлённые кнопки, спокойная палитра, жизненный цикл callbacks, ZIP staging/backup | Мышь/Tab/DPI 100–200% на реальном экране; чистая машина |
+
+Фактические PASS/SKIP и ограничения: [TEST_REPORT.md](../../../TEST_REPORT.md). Решение: [ADR-007](../06-решения/журнал-решений/ADR-007-runtime-models-and-ui.md).
+
 ## Последовательность
 
 - [ ] **0. Воспроизводимый toolchain и каркас**
@@ -60,7 +74,7 @@
   - **Контекст:** [state machine](../04-потоки/триггеры.md#turn-state-machine), [repair](../02-ядро/способности/исправить-план.md), [расходы](../07-нефункциональные/расходы.md).
   - **Критерий готовности:** exhaustive event permutations не допускают late commit; auth/usage/stop/stale не retry; identical pair stops.
 
-- [ ] **10. Eto panel в стиле Art.Brodsky**
+- [ ] **10. Eto panel: узнаваемость RhiGhAI и спокойный Apple-подход**
   - **Что делаем:** header, message rail, code/error blocks, selection line, composer, selectors, Send/Stop, footer и settings view в одном panel.
   - **Контекст:** [визуальный язык](../../idea/06-principles/interface-style.md), [характер](../02-ядро/характер.md), [panel map](../01-обзор/карта-системы.md).
   - **Критерий готовности:** keyboard/focus, 100–200% DPI, minimum dock width и reduced motion проходят; CDN отсутствует; code/error копируются.

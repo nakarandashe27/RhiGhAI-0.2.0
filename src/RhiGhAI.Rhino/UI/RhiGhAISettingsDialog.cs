@@ -18,20 +18,22 @@ internal sealed class RhiGhAISettingsDialog : Dialog
     private readonly RhiGhAIService _service;
     private readonly Label _status = new() { Font = RhiGhAIStyles.Ui(10), TextColor = RhiGhAIStyles.White, Wrap = WrapMode.Word };
     private readonly Label _activity = RhiGhAIStyles.MachineLabel("Проверяю", RhiGhAIStyles.Lime);
-    private readonly RhiGhAIButton _refresh = RhiGhAIStyles.Button("ОБНОВИТЬ", BrandButtonKind.Ghost, 104);
-    private readonly RhiGhAIButton _install = RhiGhAIStyles.Button("ПОДКЛЮЧИТЬ CODEX", BrandButtonKind.Orange, 158);
-    private readonly RhiGhAIButton _login = RhiGhAIStyles.Button("ВОЙТИ В CHATGPT", BrandButtonKind.Blue, 148);
-    private readonly RhiGhAIButton _logout = RhiGhAIStyles.Button("ВЫЙТИ", BrandButtonKind.Danger, 84);
+    private readonly RhiGhAIButton _refresh = RhiGhAIStyles.Button("Обновить", BrandButtonKind.Ghost, 104);
+    private readonly RhiGhAIButton _install = RhiGhAIStyles.Button("Обновить Codex", BrandButtonKind.Orange, 158);
+    private readonly RhiGhAIButton _login = RhiGhAIStyles.Button("Войти в ChatGPT", BrandButtonKind.Blue, 148);
+    private readonly RhiGhAIButton _logout = RhiGhAIStyles.Button("Выйти", BrandButtonKind.Danger, 84);
     private readonly DropDown _provider = new() { Font = RhiGhAIStyles.Ui(10), Height = 30 };
     private readonly TextBox _endpoint = new() { Font = RhiGhAIStyles.Ui(10), Height = 30, PlaceholderText = "https://api.openai.com/v1" };
     private readonly PasswordBox _apiKey = new() { Font = RhiGhAIStyles.Ui(10), Height = 30 };
-    private readonly RhiGhAIButton _clearKey = RhiGhAIStyles.Button("УДАЛИТЬ", BrandButtonKind.Danger, 76);
-    private readonly TextBox _model = new() { Font = RhiGhAIStyles.Ui(10), Height = 30, PlaceholderText = "gpt-5.1 · deepseek-chat · anthropic/claude-sonnet-4.5" };
+    private readonly RhiGhAIButton _clearKey = RhiGhAIStyles.Button("Удалить", BrandButtonKind.Danger, 76);
+    private readonly TextBox _model = new() { Font = RhiGhAIStyles.Ui(10), Height = 30, PlaceholderText = "Идентификатор модели API" };
     private readonly NumericStepper _retries;
     private readonly NumericStepper _timeout;
     private readonly string? _selectedModel;
     private readonly string? _selectedEffort;
     private bool _actionRunning;
+    private bool _closed;
+    private RhiGhAIButton? _save;
     private bool _keyCleared;
 
     public RhiGhAISettingsDialog(RhiGhAIService service, string? selectedModel, string? selectedEffort)
@@ -70,9 +72,9 @@ internal sealed class RhiGhAISettingsDialog : Dialog
         _refresh.Click += (_, _) => _ = RunActionAsync("Проверяю подключение", () => WithTimeoutAsync(_service.RefreshAsync));
         _install.Click += (_, _) =>
         {
-            Progress<double> progress = new(value => Application.Instance.AsyncInvoke(() =>
+            Progress<double> progress = new(value => Dispatch(() =>
             {
-                _activity.Text = $"[ ПОДГОТОВКА CODEX · {value:P0} ]";
+                _activity.Text = $"Подготовка Codex · {value:P0}";
                 _status.Text = "Копирую подписанный runtime из Codex Desktop/CLI. Сеть не используется.";
             }));
             _ = RunActionAsync("Подключение Codex", () => WithTimeoutAsync(token => _service.PrepareRuntimeAsync(progress, token), 300));
@@ -80,7 +82,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
         _login.Click += (_, _) => _ = RunActionAsync("Открываю вход ChatGPT", async () =>
         {
             _ = await WithTimeoutAsync(_service.LoginAsync).ConfigureAwait(false);
-            Application.Instance.AsyncInvoke(() => _status.Text = "Завершите вход в браузере, затем нажмите «Обновить».");
+            Dispatch(() => _status.Text = "Завершите вход в браузере, затем нажмите «Обновить».");
         });
         _logout.Click += (_, _) => _ = RunActionAsync("Выход из аккаунта", () => WithTimeoutAsync(_service.LogoutAsync));
 
@@ -98,7 +100,8 @@ internal sealed class RhiGhAISettingsDialog : Dialog
 
     private Control BuildContent()
     {
-        RhiGhAIButton save = RhiGhAIStyles.Button("СОХРАНИТЬ И ЗАКРЫТЬ", BrandButtonKind.Pink, 200);
+        RhiGhAIButton save = RhiGhAIStyles.Button("Сохранить и закрыть", BrandButtonKind.Pink, 200);
+        _save = save;
         save.Click += (_, _) => Save();
 
         StackLayout connection = new()
@@ -109,11 +112,12 @@ internal sealed class RhiGhAISettingsDialog : Dialog
             {
                 _activity,
                 _status,
+                new StackLayout { Orientation = Orientation.Horizontal, Spacing = 8, Items = { _login, _logout } },
                 new StackLayout
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 6,
-                    Items = { _refresh, _install, _login, _logout }
+                    Items = { _refresh, _install }
                 }
             }
         };
@@ -240,7 +244,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
             : connection.Provider == ProviderKind.Codex
                 ? connection.Runtime?.State == RuntimeState.Ready ? "[ НУЖЕН ВХОД ]" : "[ CODEX НЕ НАЙДЕН ]"
                 : "[ НУЖЕН КЛЮЧ ИЛИ АДРЕС ]";
-        _activity.TextColor = connection.Ready ? RhiGhAIStyles.Lime : RhiGhAIStyles.Orange;
+        _activity.TextColor = connection.Ready ? RhiGhAIStyles.Lime : RhiGhAIStyles.Coral;
 
         bool codex = CodexSelected();
         _endpoint.Enabled = !codex;
@@ -253,7 +257,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
         }
 
         _refresh.Enabled = true;
-        _install.Enabled = codex && connection.Runtime?.State != RuntimeState.Ready;
+        _install.Enabled = codex;
         _login.Enabled = codex && connection.Runtime?.State == RuntimeState.Ready && !connection.Ready;
         _logout.Enabled = codex && connection.Ready;
     }
@@ -261,6 +265,8 @@ internal sealed class RhiGhAISettingsDialog : Dialog
     private void SetActionRunning(bool running, string? message = null)
     {
         _actionRunning = running;
+        if (_save is not null) { _save.Enabled = !running; }
+        _provider.Enabled = !running;
         foreach (RhiGhAIButton button in new[] { _refresh, _install, _login, _logout })
         {
             button.Enabled = !running;
@@ -269,7 +275,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
         if (message is not null)
         {
             _activity.Text = $"[ {message.ToUpperInvariant()} ]";
-            _activity.TextColor = RhiGhAIStyles.Orange;
+            _activity.TextColor = RhiGhAIStyles.Coral;
         }
     }
 
@@ -284,7 +290,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
         try
         {
             await action().ConfigureAwait(false);
-            Application.Instance.AsyncInvoke(() =>
+            Dispatch(() =>
             {
                 SetActionRunning(false);
                 UpdateStatus();
@@ -292,7 +298,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
         }
         catch (Exception exception)
         {
-            Application.Instance.AsyncInvoke(() =>
+            Dispatch(() =>
             {
                 SetActionRunning(false);
                 // SetActionRunning turns all four buttons back on unconditionally; only UpdateStatus
@@ -307,6 +313,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
 
     private void Save()
     {
+        if (_actionRunning) { return; }
         RhiGhAISettings next;
         // null keeps the stored key, an empty string deletes it, anything else replaces it.
         string? key = _apiKey.Text.Length > 0 ? _apiKey.Text : _keyCleared ? string.Empty : null;
@@ -319,7 +326,7 @@ internal sealed class RhiGhAISettingsDialog : Dialog
                 (int)_retries.Value,
                 (int)_timeout.Value,
                 _service.Settings.DefaultTarget,
-                typedModel.Length > 0 ? typedModel : _selectedModel,
+                CodexSelected() ? _selectedModel : typedModel.Length > 0 ? typedModel : _selectedModel,
                 _selectedEffort,
                 CodexSelected() ? ProviderKind.Codex : ProviderKind.OpenAiCompatible,
                 typedEndpoint.Length > 0 ? typedEndpoint : null).Validate();
@@ -334,6 +341,13 @@ internal sealed class RhiGhAISettingsDialog : Dialog
 
         Close();
         Saved?.Invoke(this, new SettingsSaved(next, key));
+    }
+
+    private void Dispatch(Action action) => Application.Instance.AsyncInvoke(() => { if (!_closed) { action(); } });
+    protected override void OnClosed(EventArgs e)
+    {
+        _closed = true;
+        base.OnClosed(e);
     }
 
     public event EventHandler<SettingsSaved>? Saved;

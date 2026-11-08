@@ -20,6 +20,6 @@
     <Company>RhiGhAI personal project</Company>
     <Product>RhiGhAI</Product>
     <Copyright>Copyright © 2026</Copyright>
-    <VersionPrefix>0.2.0</VersionPrefix>
+    <VersionPrefix>0.2.2</VersionPrefix>
   </PropertyGroup>
 </Project>
