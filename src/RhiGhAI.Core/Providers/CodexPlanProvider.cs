@@ -206,7 +206,7 @@ public sealed class CodexPlanProvider : IPlanProvider
         Runtime = runtime;
         if (runtime.State != RuntimeState.Ready || runtime.ExecutablePath is null)
         {
-            throw new FileNotFoundException("Codex runtime не найден. Откройте настройки и нажмите «Подключить Codex».");
+            throw new FileNotFoundException("Codex runtime не найден. Откройте настройки и нажмите «Обновить Codex».");
         }
 
         if (_client is not null)
