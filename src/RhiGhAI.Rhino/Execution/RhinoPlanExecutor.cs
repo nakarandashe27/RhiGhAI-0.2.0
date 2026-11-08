@@ -151,13 +151,20 @@ public static class RhinoPlanExecutor
     private static NurbsCurve CreateCurve(CreateCurveOperation operation)
     {
         List<Point3d> points = operation.Points.Select(point => new Point3d(point.X, point.Y, point.Z)).ToList();
-        if (operation.Closed && points.Count > 1 && points[0].DistanceTo(points[^1]) <= 1e-9)
+        // A periodic interpolation closes only when the loop's first point is repeated at the end;
+        // without it Rhino returns an open curve and a loft through it gets a seam slit and no caps.
+        if (operation.Closed && points[0].DistanceTo(points[^1]) > 1e-9)
         {
-            points.RemoveAt(points.Count - 1);
+            points.Add(points[0]);
         }
 
-        return Curve.CreateInterpolatedCurve(points, 3, operation.Closed ? CurveKnotStyle.ChordPeriodic : CurveKnotStyle.Chord) as NurbsCurve
-            ?? throw new RhinoExecutionException("CurveFailed", "Rhino не построил кривую через заданные точки.");
+        NurbsCurve? curve = Curve.CreateInterpolatedCurve(points, 3, operation.Closed ? CurveKnotStyle.ChordPeriodic : CurveKnotStyle.Chord) as NurbsCurve;
+        if (curve is null || curve.IsClosed != operation.Closed)
+        {
+            throw new RhinoExecutionException("CurveFailed", "Rhino не построил кривую через заданные точки.");
+        }
+
+        return curve;
     }
 
     private static ArcCurve CreateCircle(CreateCircleOperation operation)

@@ -96,6 +96,9 @@ var formPlan = @"{""schemaVersion"":1,""targetHost"":""rhino"",""summary"":""Fre
 {""kind"":""createCircle"",""id"":""base"",""center"":{""x"":0,""y"":0,""z"":0},""normal"":{""x"":0,""y"":0,""z"":1},""radius"":10,""layer"":""Form""},
 {""kind"":""copy"",""id"":""top"",""references"":[""base""],""translation"":{""x"":0,""y"":0,""z"":30},""rotation"":{""axis"":{""x"":0,""y"":0,""z"":1},""angleDegrees"":45,""center"":{""x"":0,""y"":0,""z"":0}},""scale"":{""factor"":0.6,""center"":{""x"":0,""y"":0,""z"":0}},""layer"":""Form""},
 {""kind"":""loft"",""id"":""tower"",""curveIds"":[""base"",""top""],""closed"":false,""cap"":true,""layer"":""Form""},
+{""kind"":""createCurve"",""id"":""blob"",""points"":[{""x"":60,""y"":40,""z"":0},{""x"":70,""y"":45,""z"":0},{""x"":68,""y"":55,""z"":0},{""x"":55,""y"":52,""z"":0}],""closed"":true,""layer"":""Form""},
+{""kind"":""copy"",""id"":""blobTop"",""references"":[""blob""],""translation"":{""x"":0,""y"":0,""z"":20},""rotation"":{""axis"":{""x"":0,""y"":0,""z"":1},""angleDegrees"":30,""center"":{""x"":62,""y"":48,""z"":0}},""scale"":null,""layer"":""Form""},
+{""kind"":""loft"",""id"":""blobLoft"",""curveIds"":[""blob"",""blobTop""],""closed"":false,""cap"":true,""layer"":""Form""},
 {""kind"":""createCurve"",""id"":""rail"",""points"":[{""x"":40,""y"":0,""z"":0},{""x"":40,""y"":0,""z"":20},{""x"":50,""y"":0,""z"":40}],""closed"":false,""layer"":""Form""},
 {""kind"":""createCircle"",""id"":""profile"",""center"":{""x"":40,""y"":0,""z"":0},""normal"":{""x"":0,""y"":0,""z"":1},""radius"":2,""layer"":""Form""},
 {""kind"":""sweep1"",""id"":""swept"",""railId"":""rail"",""profileIds"":[""profile""],""closed"":false,""cap"":false,""layer"":""Form""},
@@ -108,7 +111,7 @@ var formPlan = @"{""schemaVersion"":1,""targetHost"":""rhino"",""summary"":""Fre
 var formSnapshot = snapshot();
 var formResult = execute(formSnapshot, compile(formPlan, formSnapshot));
 var formIds = ((System.Collections.IEnumerable)formResult.GetType().GetProperty("CreatedOrChangedIds").GetValue(formResult)).Cast<Guid>().ToArray();
-if (formIds.Length != 5) throw new Exception("Free form created " + formIds.Length + " objects, expected 5 (loft, sweep, pipe, revolve, fillet).");
+if (formIds.Length != 6) throw new Exception("Free form created " + formIds.Length + " objects, expected 6 (2 lofts, sweep, pipe, revolve, fillet).");
 foreach (var id in formIds) {
     var created = __rhino_doc__.Objects.FindId(id);
     if (created == null || !(created.Geometry is Brep) || !created.Geometry.IsValid) throw new Exception("Free form result is not a valid Brep.");
@@ -119,6 +122,12 @@ if (!formIds.Select(id => (Brep)__rhino_doc__.Objects.FindId(id).Geometry).Any(b
         return b.IsSolid && Math.Abs(box.Max.Z - 30) < 1e-6 && box.Max.X < 10 + 1e-6;
     }))
     throw new Exception("Capped loft is not a 30-high solid.");
+// A loft through a closed smooth curve and its rotated copy must close too (no seam slit).
+if (!formIds.Select(id => (Brep)__rhino_doc__.Objects.FindId(id).Geometry).Any(b => {
+        var box = b.GetBoundingBox(true);
+        return b.IsSolid && Math.Abs(box.Max.Z - 20) < 1e-6 && box.Min.Y > 30;
+    }))
+    throw new Exception("Loft through closed smooth curves is not a solid.");
 if (!__rhino_doc__.Undo()) throw new Exception("Free form Undo failed.");
 if (formIds.Any(id => __rhino_doc__.Objects.FindId(id) != null)) throw new Exception("Free form objects remained after one Undo.");
 // A fillet that cannot succeed fails before anything is written.
